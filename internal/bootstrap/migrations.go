@@ -546,9 +546,16 @@ func migration005FixArticle157(ctx context.Context, db *mongo.Database, log zero
 	}
 	
 	// 2. Carregar dados atualizados do penal.json
-	data, err := os.ReadFile("seeds/penal.json")
+	seedFile := findSeedFile("penal.json")
+	if seedFile == "" {
+		return fmt.Errorf("arquivo penal.json não encontrado")
+	}
+	
+	log.Info().Msgf("📁 Carregando artigos de: %s", seedFile)
+	
+	data, err := os.ReadFile(seedFile)
 	if err != nil {
-		return err
+		return fmt.Errorf("erro ao ler arquivo penal.json: %w", err)
 	}
 
 	var artigos []domain.ArtigoPenal
