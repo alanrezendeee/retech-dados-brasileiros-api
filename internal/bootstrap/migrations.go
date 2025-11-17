@@ -66,6 +66,11 @@ func NewMigrationManager(db *mongo.Database, log zerolog.Logger) *MigrationManag
 				Description: "Atualizar artigos penais (inclui importunação sexual - 215, 215-A, 216-A)",
 				Apply:       seedPenal, // Reutiliza a mesma função que faz upsert
 			},
+			{
+				Version:     "005_fix_article_157",
+				Description: "Corrigir estrutura completa do artigo 157 do CP (7 dispositivos)",
+				Apply:       migration005FixArticle157,
+			},
 		},
 	}
 }
@@ -515,6 +520,120 @@ func seedPenal(ctx context.Context, db *mongo.Database, log zerolog.Logger) erro
 		}
 	}
 	
+	return nil
+}
+
+// migration005FixArticle157 corrige a estrutura completa do artigo 157 do CP
+func migration005FixArticle157(ctx context.Context, db *mongo.Database) error {
+	log := zerolog.Ctx(ctx)
+	log.Info().Msg("🔄 Executando migration 005: Correção completa do artigo 157 do CP...")
+	
+	// 1. Deletar o CP:157.1 antigo (estrutura incorreta)
+	coll := db.Collection("penal_artigos")
+	
+	// Primeiro, fazer backup do artigo atual
+	var oldArticle bson.M
+	err := coll.FindOne(ctx, bson.M{"idUnico": "CP:157.1"}).Decode(&oldArticle)
+	if err == nil {
+		log.Info().Msgf("📋 Backup do CP:157.1 atual: %v", oldArticle["descricao"])
+	}
+	
+	// Deletar o antigo CP:157.1
+	result, err := coll.DeleteOne(ctx, bson.M{"idUnico": "CP:157.1"})
+	if err != nil {
+		log.Warn().Msgf("⚠️ Erro ao deletar CP:157.1 antigo: %v", err)
+	} else if result.DeletedCount > 0 {
+		log.Info().Msg("✅ CP:157.1 antigo deletado com sucesso")
+	}
+	
+	// 2. Carregar dados atualizados do penal.json
+	data, err := os.ReadFile("seeds/penal.json")
+	if err != nil {
+		return err
+	}
+
+	var artigos []domain.ArtigoPenal
+	if err := json.Unmarshal(data, &artigos); err != nil {
+		return err
+	}
+
+	// 3. Filtrar apenas os artigos do 157 que precisam ser atualizados/inseridos
+	art157Updates := []string{
+		"CP:157",     // Atualizar caso tenha mudado
+		"CP:157.1",   // Novo - Roubo impróprio
+		"CP:157.2",   // Atualizar - Causas de aumento
+		"CP:157.2-A", // Novo - Aumento 2/3
+		"CP:157.2-B", // Novo - Aumento em dobro
+		"CP:157.3.I", // Novo - Lesão grave
+		"CP:157.3.II",// Novo - Latrocínio
+	}
+
+	updateCount := 0
+	insertCount := 0
+
+	for _, artigo := range artigos {
+		// Processar apenas artigos do 157
+		found := false
+		for _, id := range art157Updates {
+			if artigo.IdUnico == id {
+				found = true
+				break
+			}
+		}
+		if !found {
+			continue
+		}
+
+		// Adicionar campos calculados
+		artigo.Busca = artigo.Codigo + " " + artigo.Descricao + " " + artigo.TextoCompleto
+		artigo.CreatedAt = time.Now()
+		artigo.UpdatedAt = time.Now()
+
+		// Upsert do artigo
+		opts := options.Update().SetUpsert(true)
+		filter := bson.M{"idUnico": artigo.IdUnico}
+		update := bson.M{
+			"$set": artigo,
+			"$setOnInsert": bson.M{
+				"createdAt": time.Now(),
+			},
+		}
+
+		result, err := coll.UpdateOne(ctx, filter, update, opts)
+		if err != nil {
+			log.Error().Msgf("❌ Erro ao processar %s: %v", artigo.IdUnico, err)
+			continue
+		}
+
+		if result.UpsertedCount > 0 {
+			insertCount++
+			log.Info().Msgf("✅ Inserido: %s - %s", artigo.IdUnico, artigo.Descricao)
+		} else if result.ModifiedCount > 0 {
+			updateCount++
+			log.Info().Msgf("📝 Atualizado: %s - %s", artigo.IdUnico, artigo.Descricao)
+		}
+	}
+
+	// 4. Verificar total de artigos
+	totalCount, err := coll.CountDocuments(ctx, bson.M{})
+	if err != nil {
+		log.Warn().Msgf("⚠️ Erro ao contar artigos: %v", err)
+	} else {
+		log.Info().Msgf("📊 Total de artigos no banco: %d", totalCount)
+		if totalCount < 116 {
+			log.Warn().Msgf("⚠️ ATENÇÃO: Esperado 116 artigos, mas temos apenas %d", totalCount)
+		}
+	}
+
+	// 5. Verificar especificamente os artigos do 157
+	count157, err := coll.CountDocuments(ctx, bson.M{"artigo": 157})
+	if err != nil {
+		log.Warn().Msgf("⚠️ Erro ao contar artigos 157: %v", err)
+	} else {
+		log.Info().Msgf("📊 Total de variações do artigo 157: %d (esperado: 7)", count157)
+	}
+
+	log.Info().Msgf("✅ Migration 005 concluída! Inseridos: %d, Atualizados: %d", insertCount, updateCount)
 	return nil
 }
 
