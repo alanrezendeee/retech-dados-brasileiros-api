@@ -71,6 +71,11 @@ func NewMigrationManager(db *mongo.Database, log zerolog.Logger) *MigrationManag
 				Description: "Corrigir estrutura completa do artigo 157 do CP (7 dispositivos)",
 				Apply:       migration005FixArticle157,
 			},
+			{
+				Version:     "006_add_article_157_missing",
+				Description: "Adicionar artigos 157 que faltaram na migration 005",
+				Apply:       migration006AddArticle157Missing,
+			},
 		},
 	}
 }
@@ -562,6 +567,8 @@ func migration005FixArticle157(ctx context.Context, db *mongo.Database, log zero
 	if err := json.Unmarshal(data, &artigos); err != nil {
 		return err
 	}
+	
+	log.Info().Msgf("📊 Total de artigos no JSON: %d", len(artigos))
 
 	// 3. Filtrar apenas os artigos do 157 que precisam ser atualizados/inseridos
 	art157Updates := []string{
@@ -578,11 +585,17 @@ func migration005FixArticle157(ctx context.Context, db *mongo.Database, log zero
 	insertCount := 0
 
 	for _, artigo := range artigos {
+		// Log para debug
+		if strings.HasPrefix(artigo.Codigo, "157") {
+			log.Info().Msgf("🔍 Verificando artigo: Codigo=%s, IdUnico=%s", artigo.Codigo, artigo.IdUnico)
+		}
+		
 		// Processar apenas artigos do 157
 		found := false
 		for _, id := range art157Updates {
 			if artigo.IdUnico == id {
 				found = true
+				log.Info().Msgf("✅ Artigo encontrado para processar: %s", id)
 				break
 			}
 		}
@@ -640,6 +653,40 @@ func migration005FixArticle157(ctx context.Context, db *mongo.Database, log zero
 	}
 
 	log.Info().Msgf("✅ Migration 005 concluída! Inseridos: %d, Atualizados: %d", insertCount, updateCount)
+	return nil
+}
+
+// migration006AddArticle157Missing adiciona os artigos do 157 que faltaram
+func migration006AddArticle157Missing(ctx context.Context, db *mongo.Database, log zerolog.Logger) error {
+	log.Info().Msg("🔄 Executando migration 006: Adicionar artigos 157 faltantes...")
+	
+	// Usar a função seedPenal que já tem toda a lógica correta
+	// incluindo o mapeamento correto do campo IdUnico
+	err := seedPenal(ctx, db, log)
+	if err != nil {
+		return fmt.Errorf("erro ao executar seedPenal: %w", err)
+	}
+	
+	// Verificar especificamente os artigos do 157
+	coll := db.Collection("penal_artigos")
+	count157, err := coll.CountDocuments(ctx, bson.M{"artigo": 157})
+	if err != nil {
+		log.Warn().Msgf("⚠️ Erro ao contar artigos 157: %v", err)
+	} else {
+		log.Info().Msgf("📊 Total de variações do artigo 157: %d (esperado: 7)", count157)
+		if count157 >= 7 {
+			log.Info().Msg("✅ Todos os artigos 157 foram adicionados com sucesso!")
+		}
+	}
+	
+	// Verificar total geral
+	totalCount, err := coll.CountDocuments(ctx, bson.M{})
+	if err != nil {
+		log.Warn().Msgf("⚠️ Erro ao contar total: %v", err)
+	} else {
+		log.Info().Msgf("📊 Total de artigos no banco: %d (esperado: 116)", totalCount)
+	}
+	
 	return nil
 }
 
