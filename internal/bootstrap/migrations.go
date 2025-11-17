@@ -61,6 +61,11 @@ func NewMigrationManager(db *mongo.Database, log zerolog.Logger) *MigrationManag
 				Description: "Popular artigos penais brasileiros",
 				Apply:       seedPenal,
 			},
+			{
+				Version:     "004_update_penal",
+				Description: "Atualizar artigos penais (inclui importunação sexual - 215, 215-A, 216-A)",
+				Apply:       seedPenal, // Reutiliza a mesma função que faz upsert
+			},
 		},
 	}
 }
