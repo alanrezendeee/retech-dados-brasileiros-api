@@ -2142,7 +2142,7 @@
   {
     "codigo": "157.2-A",
     "artigo": 157,
-    "paragrafo": "2-A",
+    "paragrafo": null,
     "inciso": null,
     "alinea": null,
     "descricao": "Roubo com aumento de 2/3",
@@ -2162,7 +2162,7 @@
   {
     "codigo": "157.2-B",
     "artigo": 157,
-    "paragrafo": "2-B",
+    "paragrafo": null,
     "inciso": null,
     "alinea": null,
     "descricao": "Roubo com aumento em dobro",
