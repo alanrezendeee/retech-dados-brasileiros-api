@@ -524,8 +524,7 @@ func seedPenal(ctx context.Context, db *mongo.Database, log zerolog.Logger) erro
 }
 
 // migration005FixArticle157 corrige a estrutura completa do artigo 157 do CP
-func migration005FixArticle157(ctx context.Context, db *mongo.Database) error {
-	log := zerolog.Ctx(ctx)
+func migration005FixArticle157(ctx context.Context, db *mongo.Database, log zerolog.Logger) error {
 	log.Info().Msg("🔄 Executando migration 005: Correção completa do artigo 157 do CP...")
 	
 	// 1. Deletar o CP:157.1 antigo (estrutura incorreta)
