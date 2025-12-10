@@ -76,6 +76,16 @@ func NewMigrationManager(db *mongo.Database, log zerolog.Logger) *MigrationManag
 				Description: "Adicionar artigos 157 que faltaram na migration 005",
 				Apply:       migration006AddArticle157Missing,
 			},
+			{
+				Version:     "007_add_article_331",
+				Description: "Adicionar artigo 331 (Desacato) do CP",
+				Apply:       migration007AddArticle331,
+			},
+			{
+				Version:     "008_fix_articles_47_337",
+				Description: "Corrigir descrições dos artigos 47 (LCP) e 337 (CP)",
+				Apply:       migration008FixArticles47And337,
+			},
 		},
 	}
 }
@@ -687,6 +697,86 @@ func migration006AddArticle157Missing(ctx context.Context, db *mongo.Database, l
 		log.Info().Msgf("📊 Total de artigos no banco: %d (esperado: 116)", totalCount)
 	}
 	
+	return nil
+}
+
+// migration007AddArticle331 adiciona o artigo 331 (Desacato) do CP
+func migration007AddArticle331(ctx context.Context, db *mongo.Database, log zerolog.Logger) error {
+	log.Info().Msg("🔄 Executando migration 007: Adicionar artigo 331 (Desacato) do CP...")
+	
+	// Usar a função seedPenal que já tem toda a lógica correta
+	// incluindo o mapeamento correto do campo IdUnico
+	err := seedPenal(ctx, db, log)
+	if err != nil {
+		return fmt.Errorf("erro ao executar seedPenal: %w", err)
+	}
+	
+	// Verificar se o artigo 331 foi adicionado
+	coll := db.Collection("penal_artigos")
+	count331, err := coll.CountDocuments(ctx, bson.M{"idUnico": "CP:331"})
+	if err != nil {
+		log.Warn().Msgf("⚠️ Erro ao verificar artigo 331: %v", err)
+	} else if count331 > 0 {
+		log.Info().Msg("✅ Artigo 331 (Desacato) adicionado com sucesso!")
+	} else {
+		log.Warn().Msg("⚠️ Artigo 331 não foi encontrado após a migration")
+	}
+	
+	// Verificar total geral
+	totalCount, err := coll.CountDocuments(ctx, bson.M{})
+	if err != nil {
+		log.Warn().Msgf("⚠️ Erro ao contar total: %v", err)
+	} else {
+		log.Info().Msgf("📊 Total de artigos no banco: %d (esperado: 117)", totalCount)
+		if totalCount >= 117 {
+			log.Info().Msg("✅ Total de artigos atualizado corretamente!")
+		}
+	}
+	
+	return nil
+}
+
+// migration008FixArticles47And337 corrige as descrições incorretas dos artigos 47 (LCP) e 337 (CP)
+func migration008FixArticles47And337(ctx context.Context, db *mongo.Database, log zerolog.Logger) error {
+	log.Info().Msg("🔄 Executando migration 008: Corrigir artigos 47 (LCP) e 337 (CP)...")
+	
+	// Usar a função seedPenal que já tem toda a lógica correta
+	// Ela fará upsert dos artigos corrigidos automaticamente
+	err := seedPenal(ctx, db, log)
+	if err != nil {
+		return fmt.Errorf("erro ao executar seedPenal: %w", err)
+	}
+	
+	// Verificar se os artigos foram corrigidos
+	coll := db.Collection("penal_artigos")
+	
+	// Verificar artigo 47 do LCP
+	var artigo47 domain.ArtigoPenal
+	err = coll.FindOne(ctx, bson.M{"idUnico": "LCP:47"}).Decode(&artigo47)
+	if err != nil {
+		log.Warn().Msgf("⚠️ Erro ao verificar artigo LCP:47: %v", err)
+	} else {
+		if artigo47.Descricao == "Exercício ilegal de profissão ou atividade" {
+			log.Info().Msg("✅ Artigo LCP:47 corrigido com sucesso!")
+		} else {
+			log.Warn().Msgf("⚠️ Artigo LCP:47 ainda não está correto. Descrição atual: %s", artigo47.Descricao)
+		}
+	}
+	
+	// Verificar artigo 337 do CP
+	var artigo337 domain.ArtigoPenal
+	err = coll.FindOne(ctx, bson.M{"idUnico": "CP:337"}).Decode(&artigo337)
+	if err != nil {
+		log.Warn().Msgf("⚠️ Erro ao verificar artigo CP:337: %v", err)
+	} else {
+		if artigo337.Descricao == "Subtrair, reter ou inutilizar livro oficial, processo ou documento" {
+			log.Info().Msg("✅ Artigo CP:337 corrigido com sucesso!")
+		} else {
+			log.Warn().Msgf("⚠️ Artigo CP:337 ainda não está correto. Descrição atual: %s", artigo337.Descricao)
+		}
+	}
+	
+	log.Info().Msg("✅ Migration 008 concluída!")
 	return nil
 }
 

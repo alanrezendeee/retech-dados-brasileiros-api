@@ -1705,7 +1705,7 @@ Validar configurações críticas no startup (`main.go`), não na primeira reque
 
 **Após implementar uma nova funcionalidade ou endpoint em API existente:**
 
-> 💡 **Baseado na implementação da "Busca Reversa de CEP"**  
+> 💡 **Baseado na implementação da "Busca Reversa de CEP"**
 > 💡 **Este checklist é para funcionalidades, não APIs novas!**  
 > ⚠️ **USE ESTE CHECKLIST ao adicionar endpoint em API existente!**
 
@@ -1855,10 +1855,10 @@ Validar configurações críticas no startup (`main.go`), não na primeira reque
     - **Ferramenta:** Usar Google Search Console ou Ahrefs Site Audit
 
 12. **Commit e Deploy**
-   - Build sem erros (Go + Next.js)
-   - Commit com mensagem clara
-   - Deploy (Railway auto-deploy)
-   - Smoke test em produção
+    - Build sem erros (Go + Next.js)
+    - Commit com mensagem clara
+    - Deploy (Railway auto-deploy)
+    - Smoke test em produção
 
 ---
 
