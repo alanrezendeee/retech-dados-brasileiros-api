@@ -86,6 +86,11 @@ func NewMigrationManager(db *mongo.Database, log zerolog.Logger) *MigrationManag
 				Description: "Corrigir descrições dos artigos 47 (LCP) e 337 (CP)",
 				Apply:       migration008FixArticles47And337,
 			},
+			{
+				Version:     "009_add_articles_12_211_307_329_349",
+				Description: "Adicionar artigos 12 (DES), 211, 307, 329 e 349 (CP)",
+				Apply:       migration009AddArticles12_211_307_329_349,
+			},
 		},
 	}
 }
@@ -777,6 +782,53 @@ func migration008FixArticles47And337(ctx context.Context, db *mongo.Database, lo
 	}
 	
 	log.Info().Msg("✅ Migration 008 concluída!")
+	return nil
+}
+
+// migration009AddArticles12_211_307_329_349 adiciona os novos artigos penais
+func migration009AddArticles12_211_307_329_349(ctx context.Context, db *mongo.Database, log zerolog.Logger) error {
+	log.Info().Msg("🔄 Executando migration 009: Adicionar artigos 12 (DES), 211, 307, 329 e 349 (CP)...")
+	
+	// Usar a função seedPenal que já tem toda a lógica correta
+	err := seedPenal(ctx, db, log)
+	if err != nil {
+		return fmt.Errorf("erro ao executar seedPenal: %w", err)
+	}
+	
+	// Verificar se os artigos foram adicionados
+	coll := db.Collection("penal_artigos")
+	
+	artigosParaVerificar := []string{
+		"DES:12",
+		"CP:211",
+		"CP:307",
+		"CP:329",
+		"CP:349",
+	}
+	
+	for _, idUnico := range artigosParaVerificar {
+		count, err := coll.CountDocuments(ctx, bson.M{"idUnico": idUnico})
+		if err != nil {
+			log.Warn().Msgf("⚠️ Erro ao verificar artigo %s: %v", idUnico, err)
+		} else if count > 0 {
+			log.Info().Msgf("✅ Artigo %s adicionado com sucesso!", idUnico)
+		} else {
+			log.Warn().Msgf("⚠️ Artigo %s não encontrado após migration.", idUnico)
+		}
+	}
+	
+	// Verificar total geral
+	totalCount, err := coll.CountDocuments(ctx, bson.M{})
+	if err != nil {
+		log.Warn().Msgf("⚠️ Erro ao contar total: %v", err)
+	} else {
+		log.Info().Msgf("📊 Total de artigos no banco: %d (esperado: 122)", totalCount)
+		if totalCount >= 122 {
+			log.Info().Msg("✅ Total de artigos atualizado corretamente!")
+		}
+	}
+	
+	log.Info().Msg("✅ Migration 009 concluída!")
 	return nil
 }
 

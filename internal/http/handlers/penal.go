@@ -55,9 +55,9 @@ func (h *PenalHandler) ListArtigos(c *gin.Context) {
 					var cachedData map[string]interface{}
 					if json.Unmarshal([]byte(cachedJSON), &cachedData) == nil {
 						if data, ok := cachedData["data"].([]interface{}); ok {
-							// Se cache tem menos de 117 artigos, invalidar (pode estar desatualizado)
-							// Atualizado de 116 para 117 após adicionar artigo 331 (Desacato)
-							if len(data) < 117 {
+							// Se cache tem menos de 122 artigos, invalidar (pode estar desatualizado)
+							// Atualizado de 117 para 122 após adicionar artigos 12 (DES), 211, 307, 329 e 349 (CP)
+							if len(data) < 122 {
 								// Cache desatualizado, remover e buscar do banco
 								redisClient.Del(ctx, cacheKey)
 							} else {
