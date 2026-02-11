@@ -1,4 +1,4 @@
-# retech-core — Core APIs for The Retech
+# retech-core — Core APIs for The Retech - 
 
 Centraliza **serviços utilitários** e **integrações públicas** para acelerar diversos projetos (web, mobile, backoffice). Foco em **estabilidade**, **observabilidade** e **padronização** de respostas.
 
