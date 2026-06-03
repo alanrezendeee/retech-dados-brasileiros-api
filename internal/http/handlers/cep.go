@@ -172,7 +172,7 @@ func (h *CEPHandler) GetCEP(c *gin.Context) {
 			cacheTTL := time.Duration(settings.Cache.CEP.TTLDays) * 24 * time.Hour
 			cachedTime, _ := time.Parse(time.RFC3339, cached.CachedAt)
 			if time.Since(cachedTime) < cacheTTL {
-				fmt.Printf("✅ [CEP:%s] CACHE HIT → MongoDB L2 (válido, promovendo para Redis...)\n", cep)
+				fmt.Printf("✅ [CEP:%s] CACHE HIT → MongoDB L3 (válido, promovendo para Redis...)\n", cep)
 
 				// ✅ Promover para Redis (para próximas requests)
 				if h.redis != nil {
@@ -190,10 +190,10 @@ func (h *CEPHandler) GetCEP(c *gin.Context) {
 				c.JSON(http.StatusOK, cached)
 				return // ~10ms
 			} else {
-				fmt.Printf("⚠️ [CEP:%s] CACHE EXPIRADO → MongoDB L2 (TTL: %v, tentando APIs...)\n", cep, time.Since(cachedTime))
+				fmt.Printf("⚠️ [CEP:%s] CACHE EXPIRADO → MongoDB L3 (TTL: %v, tentando APIs...)\n", cep, time.Since(cachedTime))
 			}
 		} else {
-			fmt.Printf("⚠️ [CEP:%s] CACHE MISS → MongoDB L2 (tentando APIs externas...)\n", cep)
+			fmt.Printf("⚠️ [CEP:%s] CACHE MISS → MongoDB L3 (tentando APIs externas...)\n", cep)
 		}
 	}
 
@@ -353,7 +353,7 @@ func (h *CEPHandler) SearchCEP(c *gin.Context) {
 			cacheTTL := time.Duration(settings.Cache.CEP.TTLDays) * 24 * time.Hour
 			cachedTime, _ := time.Parse(time.RFC3339, cached.CachedAt)
 			if time.Since(cachedTime) < cacheTTL {
-				fmt.Printf("✅ [CEP-SEARCH] CACHE HIT → MongoDB L2 (promovendo para Redis...)\n")
+				fmt.Printf("✅ [CEP-SEARCH] CACHE HIT → MongoDB L3 (promovendo para Redis...)\n")
 
 				// Promover para Redis
 				if h.redis != nil {
@@ -377,7 +377,7 @@ func (h *CEPHandler) SearchCEP(c *gin.Context) {
 				})
 				return
 			}
-			fmt.Printf("⚠️ [CEP-SEARCH] CACHE EXPIRADO → MongoDB L2\n")
+			fmt.Printf("⚠️ [CEP-SEARCH] CACHE EXPIRADO → MongoDB L3\n")
 		}
 	}
 
@@ -431,7 +431,7 @@ func (h *CEPHandler) SearchCEP(c *gin.Context) {
 			options.Update().SetUpsert(true),
 		)
 		if err == nil {
-			fmt.Printf("✅ [CEP-SEARCH] Salvo no MongoDB L2\n")
+			fmt.Printf("✅ [CEP-SEARCH] Salvo no MongoDB L3\n")
 		}
 	}
 
