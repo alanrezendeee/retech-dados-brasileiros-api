@@ -1,7 +1,9 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,6 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/theretech/retech-core/internal/cache"
+	"github.com/theretech/retech-core/internal/cepdb"
 	"github.com/theretech/retech-core/internal/config"
 	"github.com/theretech/retech-core/internal/domain"
 	"github.com/theretech/retech-core/internal/storage"
@@ -22,13 +25,15 @@ import (
 type CEPHandler struct {
 	db       *storage.Mongo
 	redis    interface{} // interface{} para permitir nil (graceful degradation)
+	cepDB    *cepdb.DB  // nil se CEPDB_URL não configurado (graceful degradation)
 	settings *storage.SettingsRepo
 }
 
-func NewCEPHandler(db *storage.Mongo, redis interface{}, settings *storage.SettingsRepo) *CEPHandler {
+func NewCEPHandler(db *storage.Mongo, redis interface{}, cepDB *cepdb.DB, settings *storage.SettingsRepo) *CEPHandler {
 	return &CEPHandler{
 		db:       db,
 		redis:    redis,
+		cepDB:    cepDB,
 		settings: settings,
 	}
 }
@@ -132,7 +137,31 @@ func (h *CEPHandler) GetCEP(c *gin.Context) {
 		}
 	}
 
-	// 🗄️ CAMADA 2: MONGODB (backup, ~10ms)
+	// 🐘 CAMADA 2: POSTGRESQL (base própria, ~2ms)
+	if h.cepDB != nil {
+		pgCEP, err := h.cepDB.GetByCEP(ctx, cep)
+		if err == nil {
+			fmt.Printf("✅ [CEP:%s] CACHE HIT → PostgreSQL L2 (base própria)\n", cep)
+			response := cepResponseFromDB(pgCEP)
+			response.Source = "postgres"
+			response.CachedAt = pgCEP.VerifiedAt.Format(time.RFC3339)
+			// promover para Redis
+			if h.redis != nil {
+				if redisClient, ok := h.redis.(*cache.RedisClient); ok {
+					redisKey := fmt.Sprintf("cep:%s", cep)
+					redisClient.Set(ctx, redisKey, response, h.getTTL(c))
+				}
+			}
+			c.JSON(http.StatusOK, response)
+			return // ~2ms
+		} else if !errors.Is(err, cepdb.ErrNotFound) {
+			fmt.Printf("⚠️ [CEP:%s] PostgreSQL L2 error: %v\n", cep, err)
+		} else {
+			fmt.Printf("⚠️ [CEP:%s] CACHE MISS → PostgreSQL L2 (tentando L3...)\n", cep)
+		}
+	}
+
+	// 🗄️ CAMADA 3: MONGODB (legacy cache, ~10ms)
 	collection := h.db.DB.Collection("cep_cache")
 
 	if settings.Cache.CEP.Enabled {
@@ -168,7 +197,7 @@ func (h *CEPHandler) GetCEP(c *gin.Context) {
 		}
 	}
 
-	// 🌐 CAMADA 3: VIACEP (API Externa, ~100ms)
+	// 🌐 CAMADA 4: VIACEP (API Externa, ~100ms)
 	fmt.Printf("🌐 [CEP:%s] Buscando em ViaCEP (API externa)...\n", cep)
 	response, err := h.fetchViaCEP(cep)
 	if err == nil && response.CEP != "" {
@@ -181,42 +210,14 @@ func (h *CEPHandler) GetCEP(c *gin.Context) {
 		response.CEP = strings.ReplaceAll(response.CEP, "-", "")
 		response.CEP = strings.ReplaceAll(response.CEP, ".", "")
 
-		// Salvar em AMBAS camadas de cache (se habilitado)
-		if settings.Cache.CEP.Enabled {
-			// ⚡ Salvar no Redis (L1 - hot cache, 24h)
-			if h.redis != nil {
-				if redisClient, ok := h.redis.(*cache.RedisClient); ok {
-					redisKey := fmt.Sprintf("cep:%s", cep)
-					ttl := h.getTTL(c)
-					if err := redisClient.Set(ctx, redisKey, response, ttl); err != nil {
-						fmt.Printf("⚠️ [CEP:%s] Erro ao salvar no Redis: %v\n", cep, err)
-					} else {
-						fmt.Printf("✅ [CEP:%s] Salvo no Redis L1 (TTL: %v)\n", cep, ttl)
-					}
-				}
-			}
-
-			// 🗄️ Salvar no MongoDB (L2 - cold cache, 7 dias)
-			_, err := collection.UpdateOne(
-				ctx,
-				bson.M{"cep": cep},
-				bson.M{"$set": response},
-				options.Update().SetUpsert(true),
-			)
-			if err != nil {
-				fmt.Printf("⚠️ [CEP:%s] Erro ao salvar no MongoDB: %v\n", cep, err)
-			} else {
-				fmt.Printf("✅ [CEP:%s] Salvo no MongoDB L2 (TTL: %d dias)\n", cep, settings.Cache.CEPTTLDays)
-			}
-		}
-
+		h.saveToAllLayers(c, ctx, cep, response, settings)
 		c.JSON(http.StatusOK, response)
 		return
 	}
 
 	fmt.Printf("⚠️ [CEP:%s] ERRO em ViaCEP: %v (tentando Brasil API...)\n", cep, err)
 
-	// 🌐 CAMADA 3 (Fallback): BRASIL API (~150ms)
+	// 🌐 CAMADA 5 (Fallback): BRASIL API (~150ms)
 	fmt.Printf("🌐 [CEP:%s] Buscando em Brasil API (fallback)...\n", cep)
 	response, err = h.fetchBrasilAPI(cep)
 	if err == nil && response.CEP != "" {
@@ -229,35 +230,7 @@ func (h *CEPHandler) GetCEP(c *gin.Context) {
 		response.CEP = strings.ReplaceAll(response.CEP, "-", "")
 		response.CEP = strings.ReplaceAll(response.CEP, ".", "")
 
-		// Salvar em AMBAS camadas de cache (se habilitado)
-		if settings.Cache.CEP.Enabled {
-			// ⚡ Salvar no Redis (L1 - hot cache, 24h)
-			if h.redis != nil {
-				if redisClient, ok := h.redis.(*cache.RedisClient); ok {
-					redisKey := fmt.Sprintf("cep:%s", cep)
-					ttl := h.getTTL(c)
-					if err := redisClient.Set(ctx, redisKey, response, ttl); err != nil {
-						fmt.Printf("⚠️ [CEP:%s] Erro ao salvar no Redis: %v\n", cep, err)
-					} else {
-						fmt.Printf("✅ [CEP:%s] Salvo no Redis L1 (TTL: %v)\n", cep, ttl)
-					}
-				}
-			}
-
-			// 🗄️ Salvar no MongoDB (L2 - cold cache, 7 dias)
-			_, err := collection.UpdateOne(
-				ctx,
-				bson.M{"cep": cep},
-				bson.M{"$set": response},
-				options.Update().SetUpsert(true),
-			)
-			if err != nil {
-				fmt.Printf("⚠️ [CEP:%s] Erro ao salvar no MongoDB: %v\n", cep, err)
-			} else {
-				fmt.Printf("✅ [CEP:%s] Salvo no MongoDB L2 (TTL: %d dias)\n", cep, settings.Cache.CEPTTLDays)
-			}
-		}
-
+		h.saveToAllLayers(c, ctx, cep, response, settings)
 		c.JSON(http.StatusOK, response)
 		return
 	}
@@ -408,7 +381,7 @@ func (h *CEPHandler) SearchCEP(c *gin.Context) {
 		}
 	}
 
-	// 🌐 CAMADA 3: VIACEP (API Externa, ~100ms)
+	// 🌐 CAMADA 4: VIACEP (API Externa, ~100ms)
 	fmt.Printf("🌐 [CEP-SEARCH] Buscando em ViaCEP...\n")
 	results, err := h.fetchViaCEPByAddress(uf, cidade, logradouro)
 	if err != nil || len(results) == 0 {
@@ -467,6 +440,93 @@ func (h *CEPHandler) SearchCEP(c *gin.Context) {
 		"count":   len(results),
 		"source":  "viacep",
 	})
+}
+
+// saveToAllLayers salva CEP no PostgreSQL (async), Redis e MongoDB
+func (h *CEPHandler) saveToAllLayers(
+	c *gin.Context,
+	ctx context.Context,
+	cep string,
+	response *CEPResponse,
+	settings *domain.SystemSettings,
+) {
+	// 🐘 Salvar no PostgreSQL (async, não bloqueia response)
+	if h.cepDB != nil {
+		dbCEP := cepToDB(response)
+		go func() {
+			saveCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := h.cepDB.Upsert(saveCtx, dbCEP); err != nil {
+				fmt.Printf("⚠️ [CEP:%s] Erro ao salvar no PostgreSQL: %v\n", cep, err)
+			} else {
+				fmt.Printf("✅ [CEP:%s] Salvo no PostgreSQL (base própria)\n", cep)
+			}
+		}()
+	}
+
+	if !settings.Cache.CEP.Enabled {
+		return
+	}
+
+	// ⚡ Salvar no Redis (L1)
+	if h.redis != nil {
+		if redisClient, ok := h.redis.(*cache.RedisClient); ok {
+			redisKey := fmt.Sprintf("cep:%s", cep)
+			ttl := h.getTTL(c)
+			if err := redisClient.Set(ctx, redisKey, response, ttl); err != nil {
+				fmt.Printf("⚠️ [CEP:%s] Erro ao salvar no Redis: %v\n", cep, err)
+			} else {
+				fmt.Printf("✅ [CEP:%s] Salvo no Redis L1 (TTL: %v)\n", cep, ttl)
+			}
+		}
+	}
+
+	// 🗄️ Salvar no MongoDB (legacy L3)
+	mongoColl := h.db.DB.Collection("cep_cache")
+	_, err := mongoColl.UpdateOne(
+		ctx,
+		bson.M{"cep": cep},
+		bson.M{"$set": response},
+		options.Update().SetUpsert(true),
+	)
+	if err != nil {
+		fmt.Printf("⚠️ [CEP:%s] Erro ao salvar no MongoDB: %v\n", cep, err)
+	} else {
+		fmt.Printf("✅ [CEP:%s] Salvo no MongoDB L3 (TTL: %d dias)\n", cep, settings.Cache.CEP.TTLDays)
+	}
+}
+
+// cepResponseFromDB converte cepdb.CEP → CEPResponse
+func cepResponseFromDB(c *cepdb.CEP) *CEPResponse {
+	return &CEPResponse{
+		CEP:         c.CEP,
+		Logradouro:  c.Logradouro,
+		Complemento: c.Complemento,
+		Bairro:      c.Bairro,
+		Localidade:  c.Localidade,
+		UF:          c.UF,
+		IBGE:        c.IBGE,
+		DDD:         c.DDD,
+		Latitude:    c.Latitude,
+		Longitude:   c.Longitude,
+	}
+}
+
+// cepToDB converte CEPResponse → cepdb.CEP para salvar no PostgreSQL
+func cepToDB(r *CEPResponse) *cepdb.CEP {
+	return &cepdb.CEP{
+		CEP:        r.CEP,
+		Logradouro: r.Logradouro,
+		Complemento: r.Complemento,
+		Bairro:     r.Bairro,
+		Localidade: r.Localidade,
+		UF:         r.UF,
+		IBGE:       r.IBGE,
+		DDD:        r.DDD,
+		Latitude:   r.Latitude,
+		Longitude:  r.Longitude,
+		Sources:    []string{r.Source},
+	}
 }
 
 // fetchViaCEP busca CEP no ViaCEP (configurável via ENV)

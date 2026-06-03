@@ -52,3 +52,24 @@ setup: up admin ## Setup completo (up + criar admin)
 	@echo "🌐 Acesse: http://localhost:3001/admin/login"
 	@echo "📧 Email: alanrezendeee@gmail.com"
 	@echo "🔑 Senha: admin123456"
+
+crawler-up: ## Subir crawler (background crawling de CEPs)
+	@docker-compose -f build/docker-compose.yml up -d crawler
+	@echo "✅ Crawler iniciado!"
+
+crawler-down: ## Parar crawler
+	@docker-compose -f build/docker-compose.yml stop crawler
+	@echo "✅ Crawler parado!"
+
+crawler-logs: ## Ver logs do crawler
+	@docker-compose -f build/docker-compose.yml logs -f crawler
+
+crawler-enumerate: ## Subir crawler com enumeração progressiva (crawla TODOS os CEPs)
+	@CRAWLER_ENUMERATE=true docker-compose -f build/docker-compose.yml up -d crawler
+	@echo "✅ Crawler com enumeração iniciado!"
+
+logs-postgres: ## Ver logs do PostgreSQL
+	@docker-compose -f build/docker-compose.yml logs -f postgres
+
+shell-postgres: ## Shell no PostgreSQL (cepdb)
+	@docker exec -it build-postgres-1 psql -U retech -d cepdb

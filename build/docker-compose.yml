@@ -8,6 +8,7 @@ services:
     environment:
       - API_BASE_URL=http://localhost:8080
       - APIKEY_HASH_SECRET=dev-apikey-secret-change-in-production
+      - CEPDB_URL=postgres://retech:retech@postgres:5432/cepdb?sslmode=disable
     ports:
       - "8080:8080"
     volumes:
@@ -15,6 +16,22 @@ services:
     depends_on:
       - mongo
       - redis
+      - postgres
+
+  crawler:
+    build:
+      context: ..
+      dockerfile: build/Dockerfile.crawler
+    image: theretech/retech-crawler:dev
+    env_file: ../.env
+    environment:
+      - CEPDB_URL=postgres://retech:retech@postgres:5432/cepdb?sslmode=disable
+      - CRAWLER_WORKERS=3
+      - CRAWLER_ENUMERATE=false
+    depends_on:
+      - postgres
+    restart: unless-stopped
+
   mongo:
     image: mongo:7
     ports:
@@ -24,6 +41,7 @@ services:
       - ../scripts:/docker-entrypoint-initdb.d:ro
     environment:
       - MONGO_INITDB_DATABASE=retech_core
+
   redis:
     image: redis:7-alpine
     ports:
@@ -31,7 +49,20 @@ services:
     command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
     volumes:
       - redis-data:/data
+
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_DB=cepdb
+      - POSTGRES_USER=retech
+      - POSTGRES_PASSWORD=retech
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
 volumes:
   mongo-data:
   redis-data:
+  postgres-data:
 

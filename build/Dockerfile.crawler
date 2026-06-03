@@ -1,0 +1,14 @@
+# Build
+FROM golang:1.25 as build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o /out/retech-crawler ./cmd/crawler
+
+# Runtime
+FROM gcr.io/distroless/base-debian12
+WORKDIR /app
+COPY --from=build /out/retech-crawler /app/retech-crawler
+USER nonroot:nonroot
+ENTRYPOINT ["/app/retech-crawler"]

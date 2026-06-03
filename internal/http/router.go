@@ -7,6 +7,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/theretech/retech-core/internal/auth"
+	"github.com/theretech/retech-core/internal/cepdb"
 	"github.com/theretech/retech-core/internal/http/handlers"
 	"github.com/theretech/retech-core/internal/middleware"
 	"github.com/theretech/retech-core/internal/storage"
@@ -16,6 +17,7 @@ func NewRouter(
 	log zerolog.Logger,
 	m *storage.Mongo,
 	redisClient interface{}, // interface{} para permitir nil (graceful degradation)
+	cepDB *cepdb.DB,         // nil se CEPDB_URL não configurado (graceful degradation)
 	health *handlers.HealthHandler,
 	apikeys *storage.APIKeysRepo,
 	tenants *storage.TenantsRepo,
@@ -135,7 +137,7 @@ func NewRouter(
 	r.GET("/public/playground/status", playgroundHandler.GetStatus)
 
 	// Public playground/tools endpoints (sem API Key, rate limit por IP)
-	cepHandler := handlers.NewCEPHandler(m, redisClient, settings)
+	cepHandler := handlers.NewCEPHandler(m, redisClient, cepDB, settings)
 	cnpjHandler := handlers.NewCNPJHandler(m, redisClient, settings)
 	geoHandler := handlers.NewGeoHandler(estados, municipios, redisClient)
 	penalHandler := handlers.NewPenalHandler(m, redisClient)

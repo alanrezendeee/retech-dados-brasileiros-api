@@ -10,6 +10,7 @@ import (
 	"github.com/theretech/retech-core/internal/auth"
 	"github.com/theretech/retech-core/internal/bootstrap"
 	"github.com/theretech/retech-core/internal/cache"
+	"github.com/theretech/retech-core/internal/cepdb"
 	"github.com/theretech/retech-core/internal/config"
 	nethttp "github.com/theretech/retech-core/internal/http"
 	"github.com/theretech/retech-core/internal/http/handlers"
@@ -19,8 +20,9 @@ import (
 
 func main() {
 	// Validar ENVs obrigatórias (falha rápido se não configuradas)
+	config.ValidateCoreConfig()
 	config.ValidateExternalAPIsConfig()
-	
+
 	cfg := config.Load()
 	log := observability.NewLogger(cfg.Env)
 
@@ -30,23 +32,25 @@ func main() {
 		log.Fatal().Err(err).Msg("mongo_connect_error")
 	}
 
-	// Redis (opcional - graceful degradation se não configurado)
-	var redisClient interface{} // interface{} para permitir nil
-	redisURL := os.Getenv("REDIS_URL")
-
-	if redisURL != "" {
-		client, err := cache.NewRedisClient(redisURL, "", 0, log)
-		if err != nil {
-			log.Warn().Err(err).Msg("⚠️  Redis não disponível, usando apenas MongoDB (performance reduzida)")
-			redisClient = nil // Continua sem Redis (fallback gracioso)
-		} else {
-			log.Info().Msg("✅ Redis conectado - cache ultra-rápido habilitado!")
-			redisClient = client
-		}
-	} else {
-		log.Warn().Msg("⚠️  REDIS_URL não configurado, usando apenas MongoDB")
-		redisClient = nil
+	// Redis (obrigatório — validado em ValidateCoreConfig)
+	rc, err := cache.NewRedisClient(os.Getenv("REDIS_URL"), "", 0, log)
+	if err != nil {
+		log.Fatal().Err(err).Msg("redis_connect_error")
 	}
+	log.Info().Msg("✅ Redis conectado")
+	var redisClient interface{} = rc
+
+	// PostgreSQL CEP DB (obrigatório — validado em ValidateCoreConfig)
+	var cepDB *cepdb.DB
+	cepCtx, cepCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cepCancel()
+	cdb, err := cepdb.NewDB(cepCtx, os.Getenv("CEPDB_URL"), log)
+	if err != nil {
+		log.Fatal().Err(err).Msg("cepdb_connect_error")
+	}
+	log.Info().Msg("✅ PostgreSQL CEP DB conectado")
+	cepDB = cdb
+	defer cepDB.Close()
 
 	// Executar migrations/seeds
 	log.Info().Msg("Executando migrations e seeds...")
@@ -107,8 +111,8 @@ func main() {
 	)
 
 	// Router
-	health := handlers.NewHealthHandler(m.Client, redisClient) // ✅ Passar Redis também
-	router := nethttp.NewRouter(log, m, redisClient, health, apikeys, tenants, users, estados, municipios, settings, activityLogs, jwtService)
+	health := handlers.NewHealthHandler(m.Client, redisClient)
+	router := nethttp.NewRouter(log, m, redisClient, cepDB, health, apikeys, tenants, users, estados, municipios, settings, activityLogs, jwtService)
 
 	srv := &http.Server{
 		Addr:         ":" + cfg.HTTPPort,
