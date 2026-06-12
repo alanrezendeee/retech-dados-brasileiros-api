@@ -190,32 +190,19 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		return
 	}
 
-	// Buscar rate limit padrão das configurações
-	settings, err := h.settings.Get(ctx)
-	var defaultRateLimit *domain.RateLimitConfig
-	if err == nil && settings != nil {
-		defaultRateLimit = &domain.RateLimitConfig{
-			RequestsPerDay:    settings.DefaultRateLimit.RequestsPerDay,
-			RequestsPerMinute: settings.DefaultRateLimit.RequestsPerMinute,
-		}
-		fmt.Printf("✅ [Register] Aplicando rate limit padrão: %d/dia, %d/min\n",
-			defaultRateLimit.RequestsPerDay, defaultRateLimit.RequestsPerMinute)
-	} else {
-		// Fallback se não encontrar settings
-		defaultRateLimit = &domain.RateLimitConfig{
-			RequestsPerDay:    1000,
-			RequestsPerMinute: 60,
-		}
-		fmt.Printf("⚠️ [Register] Usando fallback: 1000/dia, 60/min\n")
-	}
+	// Pricing v2: novo tenant entra no plano free (100/dia, 5/min)
+	freeLimits := domain.PlanLimits(domain.PlanFree)
+	fmt.Printf("✅ [Register] Aplicando plano free: %d/dia, %d/min\n",
+		freeLimits.RequestsPerDay, freeLimits.RequestsPerMinute)
 
-	// Criar tenant com rate limit padrão
+	// Criar tenant no plano free
 	tenant := &domain.Tenant{
 		TenantID:  generateTenantID(req.TenantName),
 		Name:      req.TenantName,
 		Email:     req.TenantEmail,
 		Active:    true,
-		RateLimit: defaultRateLimit, // ✅ Sempre salvar rate limit!
+		Plan:      domain.PlanFree,
+		RateLimit: &freeLimits, // ✅ Sempre salvar rate limit!
 	}
 
 	if err := h.tenants.Insert(ctx, tenant); err != nil {

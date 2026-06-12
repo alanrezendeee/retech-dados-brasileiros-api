@@ -344,9 +344,10 @@ func (h *TenantHandler) GetMyConfig(c *gin.Context) {
 		apiBaseURL = "https://api-core.theretech.com.br"
 	}
 
-	// Rate Limit
-	dailyLimit := int64(1000)
-	minuteLimit := int64(60)
+	// Rate Limit (fallback: limites do plano)
+	planLimits := domain.PlanLimits(tenant.Plan)
+	dailyLimit := planLimits.RequestsPerDay
+	minuteLimit := planLimits.RequestsPerMinute
 	if tenant.RateLimit != nil {
 		dailyLimit = tenant.RateLimit.RequestsPerDay
 		minuteLimit = tenant.RateLimit.RequestsPerMinute
@@ -482,12 +483,13 @@ func (h *TenantHandler) GetMyUsage(c *gin.Context) {
 
 	// Buscar limite diário do tenant (SEMPRE tem rateLimit salvo agora!)
 	tenant, err := h.tenants.ByTenantID(ctx, tenantID)
-	dailyLimit := int64(1000) // Fallback
+	dailyLimit := domain.PlanLimits(domain.PlanFree).RequestsPerDay // Fallback (plano free)
 
 	if err != nil || tenant == nil {
 		fmt.Printf("⚠️ [GetMyUsage] Tenant não encontrado! Usando fallback.\n")
 	} else if tenant.RateLimit == nil {
-		fmt.Printf("⚠️ [GetMyUsage] Tenant SEM rateLimit! Usando fallback.\n")
+		dailyLimit = domain.PlanLimits(tenant.Plan).RequestsPerDay
+		fmt.Printf("⚠️ [GetMyUsage] Tenant SEM rateLimit! Usando limites do plano '%s'.\n", tenant.Plan)
 	} else {
 		dailyLimit = tenant.RateLimit.RequestsPerDay
 		fmt.Printf("✅ [GetMyUsage] dailyLimit do tenant: %d/dia\n", dailyLimit)
@@ -603,14 +605,15 @@ func (h *TenantHandler) GetMyStats(c *gin.Context) {
 
 	// 3. Buscar tenant (SEMPRE tem rateLimit salvo agora!)
 	tenant, err := h.tenants.ByTenantID(ctx, tenantID)
-	dailyLimit := int64(1000) // Fallback (não deveria acontecer)
+	dailyLimit := domain.PlanLimits(domain.PlanFree).RequestsPerDay // Fallback (plano free, não deveria acontecer)
 
 	fmt.Printf("🔍 [GetMyStats] TenantID: %s\n", tenantID)
 
 	if err != nil || tenant == nil {
 		fmt.Printf("⚠️ [GetMyStats] Tenant não encontrado! Usando fallback.\n")
 	} else if tenant.RateLimit == nil {
-		fmt.Printf("⚠️ [GetMyStats] Tenant SEM rateLimit! Usando fallback.\n")
+		dailyLimit = domain.PlanLimits(tenant.Plan).RequestsPerDay
+		fmt.Printf("⚠️ [GetMyStats] Tenant SEM rateLimit! Usando limites do plano '%s'.\n", tenant.Plan)
 	} else {
 		dailyLimit = tenant.RateLimit.RequestsPerDay
 		fmt.Printf("✅ [GetMyStats] dailyLimit do tenant: %d/dia, %d/min\n",

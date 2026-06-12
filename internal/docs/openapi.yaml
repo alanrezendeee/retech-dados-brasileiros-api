@@ -12,7 +12,7 @@ info:
     - ⚡ **Performance**: Respostas em <100ms
     - 🔒 **Segurança**: API Key + Rate Limiting
     - 📊 **Dados**: Geografia, CEP, CNPJ, CPF e mais
-    - 🎁 **Gratuito**: 1.000 requests/dia no plano Free
+    - 🎁 **Gratuito**: 100 requests/dia no plano Free
     
     ## 🔐 Autenticação
     
@@ -25,9 +25,11 @@ info:
     
     ## 📈 Rate Limiting
     
-    - **Plano Free**: 1.000 requests/dia, 60/min
-    - **Plano Pro**: 10.000 requests/dia, 200/min
-    - **Plano Business**: Custom
+    - **Plano Free**: 100 requests/dia, 5/min
+    - **Plano Starter**: 1.000 requests/dia, 30/min
+    - **Plano Pro**: 10.000 requests/dia, 120/min
+    - **Plano Business**: 100.000 requests/dia, 600/min
+    - **Plano Enterprise**: Custom
     
     ## 📚 Mais Informações
     
@@ -203,6 +205,8 @@ paths:
         🆕 **Busca reversa de CEP**: encontra CEPs a partir do endereço.
         
         Digite a rua, cidade e estado para descobrir até **50 CEPs** correspondentes.
+        
+        ⭐ **Disponível a partir do plano Starter** — no plano Free retorna `403` com `{"error": "upgrade_required"}`.
         
         **Fontes de Dados:**
         - 🥇 **ViaCEP** (busca por endereço)
@@ -1411,8 +1415,11 @@ components:
         ```
         
         **Rate Limits:**
-        - Plano Free: 1.000 requests/dia, 60/min
-        - Plano Pro: 10.000 requests/dia, 200/min
+        - Plano Free: 100 requests/dia, 5/min
+        - Plano Starter: 1.000 requests/dia, 30/min
+        - Plano Pro: 10.000 requests/dia, 120/min
+        - Plano Business: 100.000 requests/dia, 600/min
+        - Plano Enterprise: Custom
 
   responses:
     Unauthorized:

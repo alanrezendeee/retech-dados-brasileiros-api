@@ -210,16 +210,26 @@ func (rl *RateLimiter) Middleware() gin.HandlerFunc {
 	}
 }
 
-// getRateLimitConfig retorna a configuração de rate limit para um tenant
-// Se o tenant tiver configuração personalizada, usa ela. Senão, usa a padrão do sistema.
+// getRateLimitConfig retorna a configuração de rate limit para um tenant.
+// Ordem de resolução:
+//  1. RateLimit gravado no tenant (custom/grandfathered — tenants existentes mantêm limites)
+//  2. Limites do plano do tenant (Pricing v2)
+//  3. Default do sistema (settings) — tenants legados sem plano nem rateLimit
+//  4. Fallback hardcoded (plano free)
 func (rl *RateLimiter) getRateLimitConfig(tenantID string) domain.RateLimitConfig {
 	ctx := context.Background()
 
 	// Tentar buscar tenant
 	tenant, err := rl.tenants.ByTenantID(ctx, tenantID)
-	if err == nil && tenant != nil && tenant.RateLimit != nil {
-		// Tenant tem configuração personalizada
-		return *tenant.RateLimit
+	if err == nil && tenant != nil {
+		if tenant.RateLimit != nil {
+			// Tenant tem configuração personalizada (ou grandfathered)
+			return *tenant.RateLimit
+		}
+		if tenant.Plan != "" {
+			// Limites definidos pelo plano
+			return domain.PlanLimits(tenant.Plan)
+		}
 	}
 
 	// Usar configuração padrão do sistema
@@ -228,11 +238,8 @@ func (rl *RateLimiter) getRateLimitConfig(tenantID string) domain.RateLimitConfi
 		return settings.DefaultRateLimit
 	}
 
-	// Fallback para valores hardcoded se tudo falhar
-	return domain.RateLimitConfig{
-		RequestsPerDay:    1000,
-		RequestsPerMinute: 60,
-	}
+	// Fallback para valores hardcoded se tudo falhar (plano free)
+	return domain.PlanLimits(domain.PlanFree)
 }
 
 // getNextDayTimestamp retorna timestamp Unix do próximo dia (meia-noite)

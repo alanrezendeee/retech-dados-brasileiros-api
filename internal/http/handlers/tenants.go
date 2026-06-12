@@ -87,6 +87,25 @@ func (h *TenantsHandler) Create(c *gin.Context) {
 		tenant.TenantID = fmt.Sprintf("tenant-%d", time.Now().Unix())
 	}
 
+	// Pricing v2: tenant criado sem plano explícito entra no free
+	if tenant.Plan == "" {
+		tenant.Plan = domain.PlanFree
+	} else if !domain.IsValidPlan(tenant.Plan) {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"type":   "https://retech-core/errors/validation-error",
+			"title":  "Validation Error",
+			"status": http.StatusBadRequest,
+			"detail": fmt.Sprintf("Plano inválido: '%s'. Use: free, starter, pro, business ou enterprise", tenant.Plan),
+		})
+		return
+	}
+
+	// Sem rate limit explícito → aplicar limites do plano
+	if tenant.RateLimit == nil {
+		limits := domain.PlanLimits(tenant.Plan)
+		tenant.RateLimit = &limits
+	}
+
 	if err := h.repo.Insert(ctx, &tenant); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"type":   "https://retech-core/errors/internal-error",
@@ -141,31 +160,50 @@ func (h *TenantsHandler) Update(c *gin.Context) {
 	fmt.Printf("🔍 [Update Tenant] TenantID: %s\n", tenantID)
 	fmt.Printf("🔍 [Update Tenant] Updates recebidos: %+v\n", updates)
 
+	// ✅ Validar plano se enviado (Pricing v2)
+	newPlan := ""
+	if p, ok := updates["plan"]; ok {
+		planStr, isStr := p.(string)
+		if !isStr || !domain.IsValidPlan(planStr) {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"type":   "https://retech-core/errors/validation-error",
+				"title":  "Validation Error",
+				"status": http.StatusBadRequest,
+				"detail": fmt.Sprintf("Plano inválido: '%v'. Use: free, starter, pro, business ou enterprise", p),
+			})
+			return
+		}
+		newPlan = planStr
+	}
+
 	// ✅ Lógica de rate limit:
-	// - Se rateLimit é null → buscar padrão e salvar
-	// - Se rateLimit existe → usar o que veio do frontend
+	// - Se rateLimit é null → aplicar limites do plano (do update ou do tenant atual)
+	// - Se rateLimit existe → usar o que veio do frontend (custom, ex: enterprise)
 	if rl, ok := updates["rateLimit"]; ok {
 		if rl == nil {
-			// Frontend enviou null → usar padrão
-			fmt.Printf("⚠️ [Update Tenant] rateLimit é NULL, buscando padrão...\n")
-			settings, err := h.settingsRepo.Get(ctx)
-			if err == nil && settings != nil {
-				updates["rateLimit"] = map[string]interface{}{
-					"RequestsPerDay":    settings.DefaultRateLimit.RequestsPerDay,
-					"RequestsPerMinute": settings.DefaultRateLimit.RequestsPerMinute,
+			plan := newPlan
+			if plan == "" {
+				if current, err := h.repo.ByTenantID(ctx, tenantID); err == nil && current != nil {
+					plan = current.Plan
 				}
-				fmt.Printf("✅ [Update Tenant] Aplicando rate limit padrão: %+v\n", updates["rateLimit"])
-			} else {
-				// Fallback
-				updates["rateLimit"] = map[string]interface{}{
-					"RequestsPerDay":    int64(1000),
-					"RequestsPerMinute": int64(60),
-				}
-				fmt.Printf("⚠️ [Update Tenant] Usando fallback: 1000/dia, 60/min\n")
 			}
+			limits := domain.PlanLimits(plan) // plano vazio/desconhecido → limites do free
+			updates["rateLimit"] = map[string]interface{}{
+				"RequestsPerDay":    limits.RequestsPerDay,
+				"RequestsPerMinute": limits.RequestsPerMinute,
+			}
+			fmt.Printf("✅ [Update Tenant] rateLimit NULL → aplicando limites do plano '%s': %+v\n", plan, updates["rateLimit"])
 		} else {
 			fmt.Printf("✅ [Update Tenant] rateLimit personalizado: %+v (tipo: %T)\n", rl, rl)
 		}
+	} else if newPlan != "" {
+		// Plano mudou sem rateLimit explícito → aplicar limites do novo plano
+		limits := domain.PlanLimits(newPlan)
+		updates["rateLimit"] = map[string]interface{}{
+			"RequestsPerDay":    limits.RequestsPerDay,
+			"RequestsPerMinute": limits.RequestsPerMinute,
+		}
+		fmt.Printf("✅ [Update Tenant] Plano '%s' → aplicando limites: %+v\n", newPlan, updates["rateLimit"])
 	} else {
 		fmt.Printf("⚠️ [Update Tenant] rateLimit não enviado, mantendo valor atual\n")
 	}

@@ -17,10 +17,7 @@ type RateLimitConfig struct {
 	RequestsPerMinute int64 // Limite por minuto
 }
 
-// GetDefaultRateLimit retorna limites padrão (free tier)
+// GetDefaultRateLimit retorna limites padrão (plano free — Pricing v2)
 func GetDefaultRateLimit() RateLimitConfig {
-	return RateLimitConfig{
-		RequestsPerDay:    1000,
-		RequestsPerMinute: 100,
-	}
+	return PlanLimits(PlanFree)
 }

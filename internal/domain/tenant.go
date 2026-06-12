@@ -10,8 +10,12 @@ type Tenant struct {
 	Company   string    `bson:"company,omitempty" json:"company,omitempty"`   // Nome da empresa
 	Purpose   string    `bson:"purpose,omitempty" json:"purpose,omitempty"`   // Finalidade de uso
 	Active    bool      `bson:"active" json:"active"`             // Tenant ativo?
-	
-	// Rate Limiting personalizado (opcional - se nil, usa o padrão do sistema)
+
+	// Plano comercial (Pricing v2): free, starter, pro, business, enterprise.
+	// Vazio = tenant legado (grandfathered: mantém limites gravados em RateLimit)
+	Plan string `bson:"plan,omitempty" json:"plan,omitempty"`
+
+	// Rate Limiting personalizado (opcional - se nil, usa os limites do plano)
 	RateLimit *RateLimitConfig `bson:"rateLimit,omitempty" json:"rateLimit,omitempty"`
 	
 	CreatedAt time.Time `bson:"createdAt" json:"createdAt"`

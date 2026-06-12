@@ -102,10 +102,7 @@ func GetDefaultSettings() *SystemSettings {
 	}
 	
 	return &SystemSettings{
-		DefaultRateLimit: RateLimitConfig{
-			RequestsPerDay:    1000, // 1k requests/dia para plano free
-			RequestsPerMinute: 60,   // 60 requests/minuto
-		},
+		DefaultRateLimit: PlanLimits(PlanFree), // Pricing v2: free = 100/dia, 5/min
 		CORS: CORSConfig{
 			Enabled: true,
 			AllowedOrigins: []string{

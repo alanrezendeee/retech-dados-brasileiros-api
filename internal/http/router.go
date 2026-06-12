@@ -118,6 +118,7 @@ func NewRouter(
 
 	// Middlewares globais
 	rateLimiter := middleware.NewRateLimiter(m.DB, tenants, settings)
+	planGate := middleware.NewPlanGate(tenants)
 	playgroundRateLimiter := middleware.NewPlaygroundRateLimiter(m.DB, settings)
 	usageLogger := middleware.NewUsageLogger(m.DB)
 	maintenanceMiddleware := middleware.NewMaintenanceMiddleware(settings)
@@ -255,7 +256,7 @@ func NewRouter(
 	)
 	{
 		cepGroup.GET("/:codigo", cepHandler.GetCEP)
-		cepGroup.GET("/buscar", cepHandler.SearchCEP) // Busca reversa
+		cepGroup.GET("/buscar", planGate.RequireReverseCEP(), cepHandler.SearchCEP) // Busca reversa (Starter+)
 	}
 
 	// CNPJ endpoints (protegidos por API Key + rate limit + logging + manutenção + scopes)
