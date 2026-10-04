@@ -17,6 +17,21 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
+// penalCacheVersion versiona TODAS as chaves Redis da API Penal.
+// Ao alterar o seed (novos dispositivos, correções de texto, remoções), incrementar
+// a versão invalida de uma só vez todas as respostas penais cacheadas (listas,
+// artigos individuais e buscas), sem precisar varrer/limpar o Redis manualmente.
+// As chaves continuam começando com "penal:" para que redis_stats.go as contabilize.
+const penalCacheVersion = "v2"
+
+// penalNiveisValidos lista os valores aceitos para o filtro `nivel`
+var penalNiveisValidos = map[string]bool{
+	"artigo":    true,
+	"paragrafo": true,
+	"inciso":    true,
+	"alinea":    true,
+}
+
 type PenalHandler struct {
 	db    *storage.Mongo
 	redis interface{} // interface{} para permitir nil (graceful degradation)
@@ -34,40 +49,82 @@ func NewPenalHandler(db *storage.Mongo, redis interface{}) *PenalHandler {
 func (h *PenalHandler) ListArtigos(c *gin.Context) {
 	ctx := c.Request.Context()
 	query := strings.ToLower(strings.TrimSpace(c.Query("q")))
-	tipo := c.Query("tipo") // "crime", "contravencao" ou vazio (todos)
-	legislacao := c.Query("legislacao") // "CP", "LCP", etc
+	tipo := c.Query("tipo")             // "crime", "contravencao", "disposicao", "revogado" ou vazio (todos)
+	legislacao := c.Query("legislacao") // "CP", "LCP", "Lei 8.137/1990", etc
+	nivel := strings.ToLower(strings.TrimSpace(c.Query("nivel")))
 
-	// Criar chave de cache
-	cacheKey := fmt.Sprintf("penal:artigos:%s:%s:%s", query, tipo, legislacao)
-	if query == "" && tipo == "" && legislacao == "" {
-		cacheKey = "penal:artigos:all"
+	// Validar nivel (se informado)
+	if nivel != "" && !penalNiveisValidos[nivel] {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"type":   "https://retech-core/errors/validation",
+			"title":  "Invalid Query",
+			"status": http.StatusBadRequest,
+			"detail": fmt.Sprintf("Parâmetro 'nivel' inválido: '%s'. Valores aceitos: artigo, paragrafo, inciso, alinea", nivel),
+		})
+		return
+	}
+
+	semFiltros := query == "" && tipo == "" && legislacao == "" && nivel == ""
+
+	// Criar chave de cache (versionada — ver penalCacheVersion)
+	cacheKey := fmt.Sprintf("penal:%s:artigos:%s:%s:%s:%s", penalCacheVersion, query, tipo, legislacao, nivel)
+	if semFiltros {
+		cacheKey = fmt.Sprintf("penal:%s:artigos:all", penalCacheVersion)
+	}
+
+	// 🗄️ Collection e filtro (montados antes do cache para reutilizar na validação do glossário)
+	collection := h.db.DB.Collection("penal_artigos")
+
+	filter := bson.M{}
+
+	// Filtro por tipo
+	if tipo != "" {
+		filter["tipo"] = tipo
+	}
+
+	// Filtro por legislação
+	if legislacao != "" {
+		filter["legislacao"] = legislacao
+	}
+
+	// Filtro por nível (artigo | paragrafo | inciso | alinea)
+	if nivel != "" {
+		filter["nivel"] = nivel
+	}
+
+	// Filtro por busca (texto)
+	if query != "" {
+		filter["busca"] = bson.M{"$regex": query, "$options": "i"}
 	}
 
 	// ⚡ CACHE REDIS (ultra-rápido, <1ms)
-	// IMPORTANTE: Para glossário completo (sem filtros), verificar se cache tem todos os artigos
+	// IMPORTANTE: Para glossário completo (sem filtros), validar que o cache reflete o banco:
+	// compara meta.total do cache com um CountDocuments ao vivo (barato, coleção indexada).
+	// Se divergir (seed alterado sem bump de penalCacheVersion), invalida e segue para o Mongo.
 	if h.redis != nil {
 		if redisClient, ok := h.redis.(*cache.RedisClient); ok {
 			cachedJSON, err := redisClient.Get(ctx, cacheKey)
 			if err == nil && cachedJSON != "" {
-				// Se é busca completa (glossário), validar que tem todos os artigos
-				if query == "" && tipo == "" && legislacao == "" {
-					// Parse rápido para verificar quantidade
-					var cachedData map[string]interface{}
-					if json.Unmarshal([]byte(cachedJSON), &cachedData) == nil {
-						if data, ok := cachedData["data"].([]interface{}); ok {
-							// Se cache tem menos de 122 artigos, invalidar (pode estar desatualizado)
-							// Atualizado de 117 para 122 após adicionar artigos 12 (DES), 211, 307, 329 e 349 (CP)
-							if len(data) < 122 {
-								// Cache desatualizado, remover e buscar do banco
-								redisClient.Del(ctx, cacheKey)
-							} else {
-								// Cache válido, retornar
-								c.Header("Content-Type", "application/json")
-								c.String(http.StatusOK, cachedJSON)
-								return // ⚡ <1ms!
-							}
+				if semFiltros {
+					var cached struct {
+						Meta struct {
+							Total int64 `json:"total"`
+						} `json:"meta"`
+					}
+					cacheValido := false
+					if json.Unmarshal([]byte(cachedJSON), &cached) == nil {
+						liveTotal, countErr := collection.CountDocuments(ctx, filter)
+						if countErr == nil && liveTotal == cached.Meta.Total {
+							cacheValido = true
 						}
 					}
+					if cacheValido {
+						c.Header("Content-Type", "application/json")
+						c.String(http.StatusOK, cachedJSON)
+						return // ⚡ <1ms!
+					}
+					// Cache desatualizado (ou inválido), remover e buscar do banco
+					redisClient.Del(ctx, cacheKey)
 				} else {
 					// Para buscas com filtros, sempre usar cache
 					c.Header("Content-Type", "application/json")
@@ -79,34 +136,16 @@ func (h *PenalHandler) ListArtigos(c *gin.Context) {
 	}
 
 	// 🗄️ BUSCAR DO MONGODB
-	collection := h.db.DB.Collection("penal_artigos")
-
-	filter := bson.M{}
-	
-	// Filtro por tipo
-	if tipo != "" {
-		filter["tipo"] = tipo
-	}
-	
-	// Filtro por legislação
-	if legislacao != "" {
-		filter["legislacao"] = legislacao
-	}
-	
-	// Filtro por busca (texto)
-	if query != "" {
-		filter["busca"] = bson.M{"$regex": query, "$options": "i"}
-	}
-
+	// Ordenação global pelo campo `ordem` (CP em ordem de artigo, depois leis especiais)
 	findOptions := options.Find().
-		SetSort(bson.D{{Key: "artigo", Value: 1}, {Key: "paragrafo", Value: 1}})
-	
-	// Se não há filtros (busca completa), retornar todos os artigos (para glossário)
-	// Se há filtros (autocomplete), limitar a 100 resultados
-	if query != "" || tipo != "" || legislacao != "" {
-		findOptions = findOptions.SetLimit(100) // Limitar para autocomplete com filtros
+		SetSort(bson.D{{Key: "ordem", Value: 1}})
+
+	// Busca textual (autocomplete) é limitada a 100 resultados.
+	// Filtros estruturais (tipo/legislacao/nivel) e a busca completa retornam todos os
+	// dispositivos, para que o glossário filtrado (ex.: nivel=artigo, legislacao=CP) seja íntegro.
+	if query != "" {
+		findOptions = findOptions.SetLimit(100)
 	}
-	// Sem filtros = retornar todos (sem limite) para glossário completo
 
 	cursor, err := collection.Find(ctx, filter, findOptions)
 	if err != nil {
@@ -139,6 +178,7 @@ func (h *PenalHandler) ListArtigos(c *gin.Context) {
 			CodigoFormatado: artigo.CodigoFormatado,
 			Descricao:       artigo.Descricao,
 			Tipo:            artigo.Tipo,
+			Nivel:           artigo.Nivel,
 			Legislacao:      artigo.Legislacao,
 			LegislacaoNome:  artigo.LegislacaoNome,
 			IdUnico:         artigo.IdUnico,
@@ -152,6 +192,7 @@ func (h *PenalHandler) ListArtigos(c *gin.Context) {
 		"meta": gin.H{
 			"total": len(results),
 			"query": query,
+			"nivel": nivel,
 		},
 	}
 
@@ -169,8 +210,9 @@ func (h *PenalHandler) ListArtigos(c *gin.Context) {
 // GetArtigo retorna um artigo específico por código
 // GET /penal/artigos/:codigo
 // Aceita:
-//   - Código simples: "121" ou "33" (busca primeiro no CP, depois em outras legislações)
-//   - ID único: "CP:121", "DRG:33", "AMB:54" (códigos curtos: CP, DRG, AMB, LCP, ECA, CTB, CDC, LVD)
+//   - Código simples: "121", "121.2", "121.2.I", "121.2.VII.a" (busca primeiro no CP, depois em outras legislações;
+//     se o mesmo código existir em várias legislações retorna 300 Multiple Choices)
+//   - ID único: "CP:121", "DRG:33", "AMB:54", "OTE:1.I" (prefixo curto da legislação + código)
 func (h *PenalHandler) GetArtigo(c *gin.Context) {
 	ctx := c.Request.Context()
 	codigo := c.Param("codigo")
@@ -191,7 +233,7 @@ func (h *PenalHandler) GetArtigo(c *gin.Context) {
 	codigoNormalizado := strings.ToLower(codigo)
 
 	// Criar chave de cache
-	cacheKey := fmt.Sprintf("penal:artigo:%s", codigoNormalizado)
+	cacheKey := fmt.Sprintf("penal:%s:artigo:%s", penalCacheVersion, codigoNormalizado)
 
 	// ⚡ CACHE REDIS
 	if h.redis != nil {
@@ -239,7 +281,7 @@ func (h *PenalHandler) GetArtigo(c *gin.Context) {
 		// Primeiro tenta no CP (legislação mais comum)
 		filter = bson.M{"codigo": codigo, "legislacao": "CP"}
 		err := collection.FindOne(ctx, filter).Decode(&artigo)
-		
+
 		if err == mongo.ErrNoDocuments {
 			// Se não encontrou no CP, busca em qualquer legislação
 			filter = bson.M{"codigo": codigo}
@@ -288,10 +330,10 @@ func (h *PenalHandler) GetArtigo(c *gin.Context) {
 					"status": http.StatusMultipleChoices,
 					"detail": fmt.Sprintf("Múltiplos artigos encontrados com código '%s'. Use o formato 'CODIGO:ARTIGO' para especificar", codigo),
 					"data": gin.H{
-						"codigo": codigo,
-						"artigos": artigos,
+						"codigo":      codigo,
+						"artigos":     artigos,
 						"legislacoes": legislacoes,
-						"sugestao": "Use: /penal/artigos/CODIGO:ARTIGO (ex: /penal/artigos/CP:121 ou /penal/artigos/DRG:33)",
+						"sugestao":    "Use: /penal/artigos/CODIGO:ARTIGO (ex: /penal/artigos/CP:121 ou /penal/artigos/DRG:33)",
 					},
 				})
 				return
@@ -343,7 +385,7 @@ func (h *PenalHandler) SearchArtigos(c *gin.Context) {
 
 	// Criar chave de cache
 	queryLower := strings.ToLower(query)
-	cacheKey := fmt.Sprintf("penal:search:%s", queryLower)
+	cacheKey := fmt.Sprintf("penal:%s:search:%s", penalCacheVersion, queryLower)
 
 	// ⚡ CACHE REDIS
 	if h.redis != nil {
@@ -370,7 +412,7 @@ func (h *PenalHandler) SearchArtigos(c *gin.Context) {
 	}
 
 	findOptions := options.Find().
-		SetSort(bson.D{{Key: "artigo", Value: 1}}).
+		SetSort(bson.D{{Key: "ordem", Value: 1}}).
 		SetLimit(50)
 
 	cursor, err := collection.Find(ctx, filter, findOptions)
@@ -404,6 +446,7 @@ func (h *PenalHandler) SearchArtigos(c *gin.Context) {
 			CodigoFormatado: artigo.CodigoFormatado,
 			Descricao:       artigo.Descricao,
 			Tipo:            artigo.Tipo,
+			Nivel:           artigo.Nivel,
 			Legislacao:      artigo.Legislacao,
 			LegislacaoNome:  artigo.LegislacaoNome,
 			IdUnico:         artigo.IdUnico,
@@ -445,12 +488,27 @@ func (h *PenalHandler) GetCacheStats(c *gin.Context) {
 		"createdAt": bson.M{"$gte": yesterday},
 	})
 
+	// Penal v2: distribuição por tipo e por nível
+	totalPorTipo := make(map[string]int64, 4)
+	for _, tipo := range []string{"crime", "contravencao", "disposicao", "revogado"} {
+		n, _ := collection.CountDocuments(ctx, bson.M{"tipo": tipo})
+		totalPorTipo[tipo] = n
+	}
+
+	totalPorNivel := make(map[string]int64, 4)
+	for _, nivel := range []string{"artigo", "paragrafo", "inciso", "alinea"} {
+		n, _ := collection.CountDocuments(ctx, bson.M{"nivel": nivel})
+		totalPorNivel[nivel] = n
+	}
+
 	c.JSON(http.StatusOK, gin.H{
-		"totalCached":  totalCached,
-		"recentCached": recentCached, // últimas 24h
-		"cacheEnabled": true,          // Sempre habilitado (dados fixos)
-		"cacheTTLDays": 365,           // Cache permanente (1 ano)
-		"autoCleanup":  false,         // Não limpa automaticamente (dados fixos)
+		"totalCached":   totalCached,
+		"recentCached":  recentCached, // últimas 24h
+		"cacheEnabled":  true,         // Sempre habilitado (dados fixos)
+		"cacheTTLDays":  365,          // Cache permanente (1 ano)
+		"autoCleanup":   false,        // Não limpa automaticamente (dados fixos)
+		"totalPorTipo":  totalPorTipo,
+		"totalPorNivel": totalPorNivel,
+		"cacheVersion":  penalCacheVersion,
 	})
 }
-

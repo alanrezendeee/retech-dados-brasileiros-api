@@ -331,19 +331,22 @@ Fase 4: ░░░░░░░░░░░░   0% ⚪ (0/7)
 - [x] `GET /penal/artigos/:codigo` - Busca artigo específico
 - [x] `GET /penal/search` - Busca por texto (descrição)
 - [x] `GET /public/penal/*` - Endpoints públicos para playground
-- [x] Fonte: Dados fixos (Código Penal + Lei de Contravenções)
+- [x] Fonte: Dados fixos — textos compilados do Planalto (Código Penal completo + LCP + 35+ leis especiais)
 - [x] **Cache 3 Camadas:**
   - [x] Redis L1 (~1ms) - Hot cache em memória (365 dias)
   - [x] MongoDB L2 (~10ms) - Cache persistente (permanente)
   - [x] Dados fixos (não muda)
-- [x] Estrutura hierárquica: Artigo → Parágrafo → Inciso → Alínea
-- [x] Tipos: Crime, Contravenção
-- [x] Legislações: CP (Código Penal), LCP (Lei de Contravenções)
-- [x] **Seed inicial:** `seeds/penal.json` com artigos mais comuns
+- [x] Estrutura hierárquica: Artigo → Parágrafo → Inciso → Alínea (campo `nivel` + filtro `?nivel=`)
+- [x] Tipos: Crime, Contravenção, Disposição (não incriminador), Revogado
+- [x] Legislações (Penal v2): CP completo (Parte Geral e Especial), LCP e 35+ leis especiais (Drogas, Maria da Penha,
+      Desarmamento, Hediondos, Ordem Tributária, Racismo, Tortura, Organização Criminosa, Abuso de Autoridade,
+      Terrorismo, ECA, CTB, CDC, Ambiental, Lavagem, Idoso, Código Eleitoral, etc)
+- [x] **Seed:** `seeds/penal.json` — milhares de dispositivos, gerado dos textos compilados do Planalto,
+      upsert por `idUnico`, ordenação global por `ordem` (migration `010_penal_v2_expansao`)
 - [x] Performance: ~1ms (Redis) / ~10ms (MongoDB)
 - [x] **Uso:** Autocomplete/Select2 para seleção de crimes
 - [x] Scope: `penal` (controle granular de acesso)
-- [x] Índices MongoDB otimizados (codigo, busca, tipo, legislacao)
+- [x] Índices MongoDB otimizados (idUnico, codigo, busca, tipo, legislacao, ordem, legislacao+ordem)
 
 ### **📱 Telefone (PLANEJADO)** 🆕
 

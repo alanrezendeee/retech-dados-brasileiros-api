@@ -58,7 +58,7 @@ tags:
   - name: Geografia
     description: Estados, municípios e dados geográficos do Brasil
   - name: Artigos Penais
-    description: Artigos penais brasileiros (Codigo Penal + legislacoes especiais)
+    description: Dispositivos penais brasileiros - Código Penal completo (Parte Geral e Especial) + 35+ leis especiais, em nível de artigo, parágrafo, inciso e alínea (milhares de dispositivos)
 
 paths:
   # ==========================================
@@ -698,22 +698,36 @@ paths:
       tags: [Artigos Penais]
       summary: Listar Artigos Penais (Autocomplete)
       description: |
-        Retorna todos os artigos penais brasileiros, ideal para autocomplete/Select2.
-        
+        Retorna os dispositivos penais brasileiros, ideal para autocomplete/Select2.
+
+        **Cobertura da base (Penal v2):**
+        - Código Penal completo (Parte Geral e Parte Especial)
+        - Lei de Contravenções Penais
+        - 35+ leis especiais (Drogas, Maria da Penha, Desarmamento, Crimes Hediondos, Ordem Tributária,
+          Racismo, Tortura, Organização Criminosa, Abuso de Autoridade, Terrorismo, ECA, CTB, CDC,
+          Crimes Ambientais, Lavagem de Dinheiro, Estatuto do Idoso, Código Eleitoral, entre outras)
+        - Granularidade: artigo (caput), parágrafo, inciso e alínea — milhares de dispositivos
+        - Fonte: textos compilados do Planalto (campo `fonte` em cada dispositivo)
+
         **Fontes de Dados:**
-        - 💾 **Dados fixos** (seed inicial no MongoDB)
+        - 💾 **Dados fixos** (seed no MongoDB)
         - 🥇 **Cache Redis** (permanente - ~1ms)
         - 🥈 **MongoDB** (~10ms se cache miss)
-        
+
         **Performance:**
         - Cache Redis: ~1ms
         - MongoDB: ~10ms
         - Dados fixos (não expira)
-        
+
+        **Ordenação:** resultados sempre na ordem do texto legal (campo `ordem`: CP primeiro, depois leis especiais).
+
         **Filtros Disponíveis:**
         - `q` (opcional): Busca por texto na descricao
-        - `tipo` (opcional): Filtrar por tipo (`crime` ou `contravencao`)
-        - `legislacao` (opcional): Filtrar por legislacao (`CP`, `LCP`, `Lei 11.343/2006`, etc)
+        - `tipo` (opcional): Filtrar por tipo (`crime`, `contravencao`, `disposicao` ou `revogado`)
+        - `legislacao` (opcional): Filtrar por legislacao (`CP`, `LCP`, `Lei 11.343/2006`, `Lei 8.137/1990`, etc)
+        - `nivel` (opcional): Filtrar por granularidade (`artigo`, `paragrafo`, `inciso` ou `alinea`)
+
+        **Sem filtros** ou apenas com filtros estruturais (`tipo`, `legislacao`, `nivel`): retorna todos os dispositivos correspondentes (glossário). **Com busca textual (`q`):** limitado a 100 resultados (autocomplete).
         
         **Uso tipico (Autocomplete/Select2):**
         ```javascript
@@ -744,6 +758,10 @@ paths:
         # Filtrar apenas crimes do CP
         curl "__API_BASE_URL__/penal/artigos?tipo=crime&legislacao=CP" \
           -H "X-API-Key: sua_api_key_aqui"
+
+        # Apenas artigos (caput), sem parágrafos/incisos/alíneas
+        curl "__API_BASE_URL__/penal/artigos?nivel=artigo&legislacao=CP" \
+          -H "X-API-Key: sua_api_key_aqui"
         ```
       security:
         - ApiKeyAuth: []
@@ -758,18 +776,26 @@ paths:
         - name: tipo
           in: query
           required: false
-          description: "Filtrar por tipo: crime ou contravencao"
+          description: "Filtrar por tipo: crime, contravencao, disposicao (dispositivo não incriminador) ou revogado"
           schema:
             type: string
-            enum: [crime, contravencao]
+            enum: [crime, contravencao, disposicao, revogado]
             example: "crime"
         - name: legislacao
           in: query
           required: false
-          description: "Filtrar por legislacao: CP, LCP, Lei 11.343/2006, etc"
+          description: "Filtrar por legislacao: CP, LCP, Lei 11.343/2006, Lei 8.137/1990, etc"
           schema:
             type: string
             example: "CP"
+        - name: nivel
+          in: query
+          required: false
+          description: "Filtrar por granularidade do dispositivo: artigo (caput), paragrafo, inciso ou alinea. Valor inválido retorna 400."
+          schema:
+            type: string
+            enum: [artigo, paragrafo, inciso, alinea]
+            example: "artigo"
       responses:
         '200':
           description: Lista de artigos penais
@@ -799,14 +825,18 @@ paths:
                         codigoFormatado: "Art. 121 do CP"
                         descricao: "Homicídio simples"
                         tipo: "crime"
+                        nivel: "artigo"
                         legislacao: "CP"
                         legislacaoNome: "Codigo Penal"
+                        idUnico: "CP:121"
                       - codigo: "121.1"
                         codigoFormatado: "Art. 121, § 1º do CP"
                         descricao: "Homicídio qualificado"
                         tipo: "crime"
+                        nivel: "paragrafo"
                         legislacao: "CP"
                         legislacaoNome: "Codigo Penal"
+                        idUnico: "CP:121.1"
                 busca_texto:
                   summary: "Busca por texto (q=homicidio)"
                   value:
@@ -817,14 +847,29 @@ paths:
                         codigoFormatado: "Art. 121 do CP"
                         descricao: "Homicídio simples"
                         tipo: "crime"
+                        nivel: "artigo"
                         legislacao: "CP"
                         legislacaoNome: "Codigo Penal"
+                        idUnico: "CP:121"
                       - codigo: "121.1"
                         codigoFormatado: "Art. 121, § 1º do CP"
                         descricao: "Homicídio qualificado"
                         tipo: "crime"
+                        nivel: "paragrafo"
                         legislacao: "CP"
                         legislacaoNome: "Codigo Penal"
+                        idUnico: "CP:121.1"
+        '400':
+          description: Parâmetro inválido (ex. nivel fora de artigo|paragrafo|inciso|alinea)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                type: "https://retech-core/errors/validation"
+                title: "Invalid Query"
+                status: 400
+                detail: "Parâmetro 'nivel' inválido: 'x'. Valores aceitos: artigo, paragrafo, inciso, alinea"
         '401':
           $ref: '#/components/responses/Unauthorized'
         '429':
@@ -837,14 +882,35 @@ paths:
       tags: [Artigos Penais]
       summary: Buscar Artigo Penal Específico
       description: |
-        Retorna detalhes completos de um artigo penal especifico pelo codigo.
+        Retorna detalhes completos de um dispositivo penal especifico pelo codigo.
 
-        **Formato do codigo:**
-        - Artigo simples: `121`
-        - Com parágrafo: `121.1` (Art. 121, § 1º)
-        - Com inciso: `121.1.I` (Art. 121, § 1º, I)
-        - Com alínea: `121.1.I.a` (Art. 121, § 1º, I, a)
-        
+        **Convenções do `codigo`:**
+        - Artigo (caput): `121`
+        - Artigo acrescentado por lei posterior: `121-A`
+        - Parágrafo: `121.2` (Art. 121, § 2º)
+        - Parágrafo único: `163.1` (Art. 163, parágrafo único — sempre `.1`)
+        - Inciso de parágrafo: `121.2.I` (Art. 121, § 2º, I)
+        - Inciso direto do caput: `121.I` (Art. 121, I)
+        - Alínea: `121.2.VII.a` (Art. 121, § 2º, VII, a)
+
+        **Formatos aceitos no path:**
+        - **Código simples** (`121`, `121.2.I`): busca primeiro no CP; se não existir no CP e houver o mesmo
+          código em mais de uma legislação, retorna `300 Multiple Choices` com as opções.
+        - **ID único** (`PREFIXO:CODIGO`, ex. `CP:121`, `DRG:33`, `OTE:1.I`): busca exata, sem ambiguidade. Recomendado.
+
+        **Prefixos de legislação (idUnico):**
+        `CP` (Código Penal), `LCP` (Contravenções), `DRG` (Lei 11.343/2006 - Drogas), `ECA`, `CTB`,
+        `AMB` (Lei 9.605/98 - Ambiental), `CDC`, `LVD` (Lei 9.613/98 - Lavagem), `MDP` (Lei 11.340/2006 - Maria da Penha),
+        `DES` (Lei 10.826/2003 - Desarmamento), `HED` (Lei 8.072/1990 - Hediondos), `OTE` (Lei 8.137/1990 - Ordem Tributária),
+        `RAC` (Lei 7.716/1989 - Racismo), `TOR` (Lei 9.455/1997 - Tortura), `ORC` (Lei 12.850/2013 - Organização Criminosa),
+        `ABU` (Lei 13.869/2019 - Abuso de Autoridade), `TER` (Lei 13.260/2016 - Terrorismo), `GEN` (Lei 2.889/1956 - Genocídio),
+        `IDO` (Lei 10.741/2003 - Idoso), `SFN` (Lei 7.492/1986 - Sistema Financeiro), `FAL` (Lei 11.101/2005 - Falências),
+        `PCD` (Lei 13.146/2015 - Pessoa com Deficiência), `DEF` (Lei 7.853/1989), `TRA` (Lei 9.434/1997 - Transplantes),
+        `EPO` (Lei 1.521/1951 - Economia Popular), `SOL` (Lei 6.766/1979 - Parcelamento do Solo), `SOF` (Lei 9.609/1998 - Software),
+        `BIO` (Lei 11.105/2005 - Biossegurança), `INT` (Lei 9.296/1996 - Interceptação), `HIV` (Lei 12.984/2014),
+        `PRE` (Decreto-Lei 201/1967 - Prefeitos), `DIS` (Lei 9.029/1995 - Discriminação no Trabalho), `ELE` (Lei 4.737/1965 - Código Eleitoral),
+        `PIN` (Lei 9.279/1996 - Propriedade Industrial), `CVM` (Lei 6.385/1976 - Valores Mobiliários), `HBO` (Lei 14.344/2022 - Henry Borel).
+
         **Performance:**
         - Cache Redis: ~1ms
         - MongoDB: ~10ms
@@ -863,6 +929,10 @@ paths:
         # Buscar inciso I do parágrafo 1º do artigo 121
         curl __API_BASE_URL__/penal/artigos/121.1.I \
           -H "X-API-Key: sua_api_key_aqui"
+
+        # Buscar por ID único (sem ambiguidade entre legislações)
+        curl __API_BASE_URL__/penal/artigos/DRG:33 \
+          -H "X-API-Key: sua_api_key_aqui"
         ```
       security:
         - ApiKeyAuth: []
@@ -870,10 +940,10 @@ paths:
         - name: codigo
           in: path
           required: true
-          description: "Codigo do artigo (ex: 121, 121.1, 121.1.I, 121.1.I.a)"
+          description: "Codigo do dispositivo (ex: 121, 121-A, 121.2, 121.2.I, 121.2.VII.a) ou ID único PREFIXO:CODIGO (ex: CP:121, DRG:33)"
           schema:
             type: string
-            example: "121"
+            example: "CP:121"
       responses:
         '200':
           description: Artigo encontrado
@@ -924,6 +994,17 @@ paths:
                       legislacaoNome: "Código Penal"
                       penaMin: "Reclusão, de 12 a 30 anos"
                       penaMax: ""
+        '300':
+          description: Código simples existe em mais de uma legislação (fora do CP). Use o formato PREFIXO:CODIGO.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                type: "https://retech-core/errors/multiple-choices"
+                title: "Multiple Articles Found"
+                status: 300
+                detail: "Múltiplos artigos encontrados com código '33'. Use o formato 'CODIGO:ARTIGO' para especificar"
         '404':
           $ref: '#/components/responses/NotFound'
         '401':
@@ -1281,11 +1362,11 @@ components:
 
     ArtigoPenal:
       type: object
-      description: Artigo penal resumido (para autocomplete/Select2)
+      description: Dispositivo penal resumido (para autocomplete/Select2)
       properties:
         codigo:
           type: string
-          description: Codigo do artigo (ex "121", "121.1", "121.1.I")
+          description: 'Codigo do dispositivo. Convenções: "121" (caput), "121-A", "121.2" (§ 2º), "163.1" (parágrafo único), "121.2.I" (inciso), "121.2.VII.a" (alínea)'
           example: "121"
         codigoFormatado:
           type: string
@@ -1297,14 +1378,25 @@ components:
           example: "Homicidio simples"
         tipo:
           type: string
-          description: Tipo (crime ou contravencao)
+          description: 'Tipo do dispositivo: crime, contravencao, disposicao (não incriminador - Parte Geral, definições, imunidades) ou revogado (mantido para compatibilidade)'
           example: "crime"
-          enum: 
+          enum:
             - crime
             - contravencao
+            - disposicao
+            - revogado
+        nivel:
+          type: string
+          description: Granularidade do dispositivo
+          example: "artigo"
+          enum:
+            - artigo
+            - paragrafo
+            - inciso
+            - alinea
         legislacao:
           type: string
-          description: Codigo da legislacao (CP, LCP, etc)
+          description: Codigo da legislacao (CP, LCP, Lei 11.343/2006, Lei 8.137/1990, etc)
           example: "CP"
         legislacaoNome:
           type: string
@@ -1341,6 +1433,22 @@ components:
               nullable: true
               description: Alínea (se aplicável)
               example: "a"
+            ordem:
+              type: integer
+              description: Posição global do dispositivo na base (ordem do texto legal - CP primeiro, depois leis especiais). Usada para ordenar listagens.
+              example: 1234
+            parte:
+              type: string
+              description: Parte do código (quando aplicável)
+              example: "Parte Especial"
+            titulo:
+              type: string
+              description: Título do texto legal (quando aplicável)
+              example: "Título I – Dos Crimes contra a Pessoa"
+            capitulo:
+              type: string
+              description: Capítulo do texto legal (quando aplicável)
+              example: "Capítulo I – Dos Crimes contra a Vida"
             textoCompleto:
               type: string
               description: Texto completo do artigo
