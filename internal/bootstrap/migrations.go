@@ -91,6 +91,11 @@ func NewMigrationManager(db *mongo.Database, log zerolog.Logger) *MigrationManag
 				Description: "Adicionar artigos 12 (DES), 211, 307, 329 e 349 (CP)",
 				Apply:       migration009AddArticles12_211_307_329_349,
 			},
+			{
+				Version:     "010_penal_v2_expansao",
+				Description: "Penal v2: expansão para Código Penal completo + legislação especial, correção de artigos e limpeza de dispositivos inexistentes",
+				Apply:       migration010PenalV2,
+			},
 		},
 	}
 }
@@ -286,6 +291,7 @@ func seedPenal(ctx context.Context, db *mongo.Database, log zerolog.Logger) erro
 
 	// Mapeamento de legislações para códigos curtos (para idUnico)
 	legislacaoCodes := map[string]string{
+		// Legislações originais (v1)
 		"CP":              "CP",
 		"LCP":             "LCP",
 		"Lei 11.343/2006": "DRG", // Drogas
@@ -293,7 +299,36 @@ func seedPenal(ctx context.Context, db *mongo.Database, log zerolog.Logger) erro
 		"CTB":             "CTB",
 		"Lei 9.605/98":    "AMB", // Ambiente
 		"CDC":             "CDC",
-		"Lei 9.613/98":    "LVD", // Lavagem
+		"Lei 9.613/98":    "LVD", // Lavagem de dinheiro
+		"Lei 11.340/2006": "MDP", // Maria da Penha
+		"Lei 10.826/2003": "DES", // Desarmamento
+		// Legislação especial adicionada no Penal v2
+		"Lei 8.072/1990":       "HED", // Crimes hediondos
+		"Lei 8.137/1990":       "OTE", // Ordem tributária e econômica
+		"Lei 7.716/1989":       "RAC", // Racismo
+		"Lei 9.455/1997":       "TOR", // Tortura
+		"Lei 12.850/2013":      "ORC", // Organização criminosa
+		"Lei 13.869/2019":      "ABU", // Abuso de autoridade
+		"Lei 13.260/2016":      "TER", // Terrorismo
+		"Lei 2.889/1956":       "GEN", // Genocídio
+		"Lei 10.741/2003":      "IDO", // Estatuto do Idoso
+		"Lei 7.492/1986":       "SFN", // Sistema financeiro nacional
+		"Lei 11.101/2005":      "FAL", // Falências
+		"Lei 13.146/2015":      "PCD", // Estatuto da Pessoa com Deficiência
+		"Lei 7.853/1989":       "DEF", // Pessoas portadoras de deficiência
+		"Lei 9.434/1997":       "TRA", // Transplante de órgãos
+		"Lei 1.521/1951":       "EPO", // Economia popular
+		"Lei 6.766/1979":       "SOL", // Parcelamento do solo urbano
+		"Lei 9.609/1998":       "SOF", // Software
+		"Lei 11.105/2005":      "BIO", // Biossegurança
+		"Lei 9.296/1996":       "INT", // Interceptação telefônica
+		"Lei 12.984/2014":      "HIV", // Discriminação de portadores de HIV
+		"Decreto-Lei 201/1967": "PRE", // Crimes de responsabilidade de prefeitos
+		"Lei 9.029/1995":       "DIS", // Discriminação no trabalho
+		"Lei 4.737/1965":       "ELE", // Código Eleitoral
+		"Lei 9.279/1996":       "PIN", // Propriedade industrial
+		"Lei 6.385/1976":       "CVM", // Mercado de valores mobiliários
+		"Lei 14.344/2022":      "HBO", // Henry Borel
 	}
 
 	// Estratégia: Upsert baseado em idUnico
@@ -303,17 +338,17 @@ func seedPenal(ctx context.Context, db *mongo.Database, log zerolog.Logger) erro
 	now := time.Now()
 	inserted := 0
 	updated := 0
-	
+
 	for _, artigo := range artigos {
 		// Preparar artigo com timestamps e campos normalizados
 		artigo.UpdatedAt = now
 		if artigo.CreatedAt.IsZero() {
 			artigo.CreatedAt = now
 		}
-		
+
 		// Normalizar campo busca (lowercase)
 		artigo.Busca = strings.ToLower(artigo.Descricao + " " + artigo.TextoCompleto + " " + artigo.CodigoFormatado)
-		
+
 		// Gerar idUnico com código curto (se não existir)
 		if artigo.IdUnico == "" {
 			legCode := legislacaoCodes[artigo.Legislacao]
@@ -333,20 +368,20 @@ func seedPenal(ctx context.Context, db *mongo.Database, log zerolog.Logger) erro
 				}
 			}
 		}
-		
+
 		// Gerar hashConteudo se não existir
 		if artigo.HashConteudo == "" {
 			conteudoHash := fmt.Sprintf("%s:%s:%s", artigo.Legislacao, artigo.Codigo, artigo.TextoCompleto)
 			hash := sha256.Sum256([]byte(conteudoHash))
 			artigo.HashConteudo = hex.EncodeToString(hash[:])
 		}
-		
+
 		// Validar idUnico antes de fazer upsert
 		if artigo.IdUnico == "" {
 			log.Warn().Msgf("[seed] Artigo sem idUnico ignorado: código=%s, legislação=%s", artigo.Codigo, artigo.Legislacao)
 			continue
 		}
-		
+
 		// Upsert: inserir ou atualizar baseado em idUnico
 		filter := bson.M{"idUnico": artigo.IdUnico}
 		update := bson.M{
@@ -359,6 +394,11 @@ func seedPenal(ctx context.Context, db *mongo.Database, log zerolog.Logger) erro
 				"descricao":       artigo.Descricao,
 				"textoCompleto":   artigo.TextoCompleto,
 				"tipo":            artigo.Tipo,
+				"nivel":           artigo.Nivel,
+				"ordem":           artigo.Ordem,
+				"parte":           artigo.Parte,
+				"titulo":          artigo.Titulo,
+				"capitulo":        artigo.Capitulo,
 				"legislacao":      artigo.Legislacao,
 				"legislacaoNome":  artigo.LegislacaoNome,
 				"penaMin":         artigo.PenaMin,
@@ -375,7 +415,7 @@ func seedPenal(ctx context.Context, db *mongo.Database, log zerolog.Logger) erro
 				"createdAt": artigo.CreatedAt,
 			},
 		}
-		
+
 		opts := options.Update().SetUpsert(true)
 		result, err := collection.UpdateOne(ctx, filter, update, opts)
 		if err != nil {
@@ -385,11 +425,11 @@ func seedPenal(ctx context.Context, db *mongo.Database, log zerolog.Logger) erro
 				Str("codigo", artigo.Codigo).
 				Str("legislacao", artigo.Legislacao).
 				Msg("[seed] Erro ao fazer upsert do artigo")
-			
+
 			// Se for erro de índice único, tentar remover índices problemáticos e tentar novamente
 			if strings.Contains(err.Error(), "E11000") || strings.Contains(err.Error(), "duplicate key") {
 				log.Warn().Msgf("[seed] Erro de duplicata detectado para %s. Verificando e removendo índices problemáticos...", artigo.IdUnico)
-				
+
 				// Listar todos os índices e remover qualquer índice único em "codigo"
 				indexes, idxErr := collection.Indexes().List(ctx)
 				if idxErr == nil && indexes != nil {
@@ -399,7 +439,7 @@ func seedPenal(ctx context.Context, db *mongo.Database, log zerolog.Logger) erro
 							name, _ := idx["name"].(string)
 							key, _ := idx["key"].(bson.M)
 							unique, _ := idx["unique"].(bool)
-							
+
 							// Remover índice único em "codigo" (qualquer nome: codigo_unique, codigo_1, etc)
 							if unique && key != nil {
 								if _, hasCodigo := key["codigo"]; hasCodigo {
@@ -413,7 +453,7 @@ func seedPenal(ctx context.Context, db *mongo.Database, log zerolog.Logger) erro
 					}
 					indexes.Close(ctx)
 				}
-				
+
 				// Tentar novamente após remover índices problemáticos
 				result, err = collection.UpdateOne(ctx, filter, update, opts)
 				if err != nil {
@@ -425,7 +465,7 @@ func seedPenal(ctx context.Context, db *mongo.Database, log zerolog.Logger) erro
 				continue
 			}
 		}
-		
+
 		if result.UpsertedCount > 0 {
 			inserted++
 		} else if result.ModifiedCount > 0 {
@@ -434,7 +474,7 @@ func seedPenal(ctx context.Context, db *mongo.Database, log zerolog.Logger) erro
 	}
 
 	log.Info().Msgf("[seed] Processados %d artigos: %d inseridos, %d atualizados", len(artigos), inserted, updated)
-	
+
 	// Verificar contagem final e comparar com esperado
 	finalCount, err := collection.CountDocuments(ctx, bson.M{})
 	if err == nil {
@@ -442,7 +482,7 @@ func seedPenal(ctx context.Context, db *mongo.Database, log zerolog.Logger) erro
 		log.Info().Msgf("[seed] Total de artigos no banco após seed: %d", finalCount)
 		if finalCount < expectedCount {
 			log.Warn().Msgf("[seed] ⚠️  ATENÇÃO: Esperados %d artigos, mas apenas %d foram inseridos/atualizados. Verificando artigos faltantes...", expectedCount, finalCount)
-			
+
 			// Buscar todos os idUnicos que estão no banco
 			cursor, err := collection.Find(ctx, bson.M{}, options.Find().SetProjection(bson.M{"idUnico": 1}))
 			idunicosNoBanco := make(map[string]bool)
@@ -457,7 +497,7 @@ func seedPenal(ctx context.Context, db *mongo.Database, log zerolog.Logger) erro
 					}
 				}
 			}
-			
+
 			// Identificar artigos do JSON que não estão no banco
 			faltantes := []string{}
 			for _, artigo := range artigos {
@@ -465,11 +505,11 @@ func seedPenal(ctx context.Context, db *mongo.Database, log zerolog.Logger) erro
 					faltantes = append(faltantes, artigo.IdUnico)
 				}
 			}
-			
+
 			if len(faltantes) > 0 {
 				log.Warn().Msgf("[seed] 📋 %d artigos faltantes identificados: %v", len(faltantes), faltantes)
 				log.Info().Msg("[seed] Tentando inserir artigos faltantes novamente...")
-				
+
 				// Tentar inserir os faltantes novamente
 				faltantesInseridos := 0
 				for _, idUnico := range faltantes {
@@ -481,7 +521,7 @@ func seedPenal(ctx context.Context, db *mongo.Database, log zerolog.Logger) erro
 								artigo.CreatedAt = time.Now()
 							}
 							artigo.Busca = strings.ToLower(artigo.Descricao + " " + artigo.TextoCompleto + " " + artigo.CodigoFormatado)
-							
+
 							filter := bson.M{"idUnico": artigo.IdUnico}
 							update := bson.M{
 								"$set": bson.M{
@@ -493,6 +533,11 @@ func seedPenal(ctx context.Context, db *mongo.Database, log zerolog.Logger) erro
 									"descricao":       artigo.Descricao,
 									"textoCompleto":   artigo.TextoCompleto,
 									"tipo":            artigo.Tipo,
+									"nivel":           artigo.Nivel,
+									"ordem":           artigo.Ordem,
+									"parte":           artigo.Parte,
+									"titulo":          artigo.Titulo,
+									"capitulo":        artigo.Capitulo,
 									"legislacao":      artigo.Legislacao,
 									"legislacaoNome":  artigo.LegislacaoNome,
 									"penaMin":         artigo.PenaMin,
@@ -509,7 +554,7 @@ func seedPenal(ctx context.Context, db *mongo.Database, log zerolog.Logger) erro
 									"createdAt": artigo.CreatedAt,
 								},
 							}
-							
+
 							opts := options.Update().SetUpsert(true)
 							result, err := collection.UpdateOne(ctx, filter, update, opts)
 							if err == nil && result.UpsertedCount > 0 {
@@ -522,12 +567,12 @@ func seedPenal(ctx context.Context, db *mongo.Database, log zerolog.Logger) erro
 						}
 					}
 				}
-				
+
 				if faltantesInseridos > 0 {
 					log.Info().Msgf("[seed] ✅ %d artigos faltantes foram inseridos com sucesso", faltantesInseridos)
 				}
 			}
-			
+
 			// Verificar contagem final novamente
 			finalCount, _ = collection.CountDocuments(ctx, bson.M{})
 			if finalCount < expectedCount {
@@ -539,24 +584,24 @@ func seedPenal(ctx context.Context, db *mongo.Database, log zerolog.Logger) erro
 			log.Info().Msgf("[seed] ✅ Todos os %d artigos foram processados com sucesso", finalCount)
 		}
 	}
-	
+
 	return nil
 }
 
 // migration005FixArticle157 corrige a estrutura completa do artigo 157 do CP
 func migration005FixArticle157(ctx context.Context, db *mongo.Database, log zerolog.Logger) error {
 	log.Info().Msg("🔄 Executando migration 005: Correção completa do artigo 157 do CP...")
-	
+
 	// 1. Deletar o CP:157.1 antigo (estrutura incorreta)
 	coll := db.Collection("penal_artigos")
-	
+
 	// Primeiro, fazer backup do artigo atual
 	var oldArticle bson.M
 	err := coll.FindOne(ctx, bson.M{"idUnico": "CP:157.1"}).Decode(&oldArticle)
 	if err == nil {
 		log.Info().Msgf("📋 Backup do CP:157.1 atual: %v", oldArticle["descricao"])
 	}
-	
+
 	// Deletar o antigo CP:157.1
 	result, err := coll.DeleteOne(ctx, bson.M{"idUnico": "CP:157.1"})
 	if err != nil {
@@ -564,15 +609,15 @@ func migration005FixArticle157(ctx context.Context, db *mongo.Database, log zero
 	} else if result.DeletedCount > 0 {
 		log.Info().Msg("✅ CP:157.1 antigo deletado com sucesso")
 	}
-	
+
 	// 2. Carregar dados atualizados do penal.json
 	seedFile := findSeedFile("penal.json")
 	if seedFile == "" {
 		return fmt.Errorf("arquivo penal.json não encontrado")
 	}
-	
+
 	log.Info().Msgf("📁 Carregando artigos de: %s", seedFile)
-	
+
 	data, err := os.ReadFile(seedFile)
 	if err != nil {
 		return fmt.Errorf("erro ao ler arquivo penal.json: %w", err)
@@ -582,18 +627,18 @@ func migration005FixArticle157(ctx context.Context, db *mongo.Database, log zero
 	if err := json.Unmarshal(data, &artigos); err != nil {
 		return err
 	}
-	
+
 	log.Info().Msgf("📊 Total de artigos no JSON: %d", len(artigos))
 
 	// 3. Filtrar apenas os artigos do 157 que precisam ser atualizados/inseridos
 	art157Updates := []string{
-		"CP:157",     // Atualizar caso tenha mudado
-		"CP:157.1",   // Novo - Roubo impróprio
-		"CP:157.2",   // Atualizar - Causas de aumento
-		"CP:157.2-A", // Novo - Aumento 2/3
-		"CP:157.2-B", // Novo - Aumento em dobro
-		"CP:157.3.I", // Novo - Lesão grave
-		"CP:157.3.II",// Novo - Latrocínio
+		"CP:157",      // Atualizar caso tenha mudado
+		"CP:157.1",    // Novo - Roubo impróprio
+		"CP:157.2",    // Atualizar - Causas de aumento
+		"CP:157.2-A",  // Novo - Aumento 2/3
+		"CP:157.2-B",  // Novo - Aumento em dobro
+		"CP:157.3.I",  // Novo - Lesão grave
+		"CP:157.3.II", // Novo - Latrocínio
 	}
 
 	updateCount := 0
@@ -604,7 +649,7 @@ func migration005FixArticle157(ctx context.Context, db *mongo.Database, log zero
 		if strings.HasPrefix(artigo.Codigo, "157") {
 			log.Info().Msgf("🔍 Verificando artigo: Codigo=%s, IdUnico=%s", artigo.Codigo, artigo.IdUnico)
 		}
-		
+
 		// Processar apenas artigos do 157
 		found := false
 		for _, id := range art157Updates {
@@ -674,14 +719,14 @@ func migration005FixArticle157(ctx context.Context, db *mongo.Database, log zero
 // migration006AddArticle157Missing adiciona os artigos do 157 que faltaram
 func migration006AddArticle157Missing(ctx context.Context, db *mongo.Database, log zerolog.Logger) error {
 	log.Info().Msg("🔄 Executando migration 006: Adicionar artigos 157 faltantes...")
-	
+
 	// Usar a função seedPenal que já tem toda a lógica correta
 	// incluindo o mapeamento correto do campo IdUnico
 	err := seedPenal(ctx, db, log)
 	if err != nil {
 		return fmt.Errorf("erro ao executar seedPenal: %w", err)
 	}
-	
+
 	// Verificar especificamente os artigos do 157
 	coll := db.Collection("penal_artigos")
 	count157, err := coll.CountDocuments(ctx, bson.M{"artigo": 157})
@@ -693,7 +738,7 @@ func migration006AddArticle157Missing(ctx context.Context, db *mongo.Database, l
 			log.Info().Msg("✅ Todos os artigos 157 foram adicionados com sucesso!")
 		}
 	}
-	
+
 	// Verificar total geral
 	totalCount, err := coll.CountDocuments(ctx, bson.M{})
 	if err != nil {
@@ -701,21 +746,21 @@ func migration006AddArticle157Missing(ctx context.Context, db *mongo.Database, l
 	} else {
 		log.Info().Msgf("📊 Total de artigos no banco: %d (esperado: 116)", totalCount)
 	}
-	
+
 	return nil
 }
 
 // migration007AddArticle331 adiciona o artigo 331 (Desacato) do CP
 func migration007AddArticle331(ctx context.Context, db *mongo.Database, log zerolog.Logger) error {
 	log.Info().Msg("🔄 Executando migration 007: Adicionar artigo 331 (Desacato) do CP...")
-	
+
 	// Usar a função seedPenal que já tem toda a lógica correta
 	// incluindo o mapeamento correto do campo IdUnico
 	err := seedPenal(ctx, db, log)
 	if err != nil {
 		return fmt.Errorf("erro ao executar seedPenal: %w", err)
 	}
-	
+
 	// Verificar se o artigo 331 foi adicionado
 	coll := db.Collection("penal_artigos")
 	count331, err := coll.CountDocuments(ctx, bson.M{"idUnico": "CP:331"})
@@ -726,7 +771,7 @@ func migration007AddArticle331(ctx context.Context, db *mongo.Database, log zero
 	} else {
 		log.Warn().Msg("⚠️ Artigo 331 não foi encontrado após a migration")
 	}
-	
+
 	// Verificar total geral
 	totalCount, err := coll.CountDocuments(ctx, bson.M{})
 	if err != nil {
@@ -737,24 +782,24 @@ func migration007AddArticle331(ctx context.Context, db *mongo.Database, log zero
 			log.Info().Msg("✅ Total de artigos atualizado corretamente!")
 		}
 	}
-	
+
 	return nil
 }
 
 // migration008FixArticles47And337 corrige as descrições incorretas dos artigos 47 (LCP) e 337 (CP)
 func migration008FixArticles47And337(ctx context.Context, db *mongo.Database, log zerolog.Logger) error {
 	log.Info().Msg("🔄 Executando migration 008: Corrigir artigos 47 (LCP) e 337 (CP)...")
-	
+
 	// Usar a função seedPenal que já tem toda a lógica correta
 	// Ela fará upsert dos artigos corrigidos automaticamente
 	err := seedPenal(ctx, db, log)
 	if err != nil {
 		return fmt.Errorf("erro ao executar seedPenal: %w", err)
 	}
-	
+
 	// Verificar se os artigos foram corrigidos
 	coll := db.Collection("penal_artigos")
-	
+
 	// Verificar artigo 47 do LCP
 	var artigo47 domain.ArtigoPenal
 	err = coll.FindOne(ctx, bson.M{"idUnico": "LCP:47"}).Decode(&artigo47)
@@ -767,7 +812,7 @@ func migration008FixArticles47And337(ctx context.Context, db *mongo.Database, lo
 			log.Warn().Msgf("⚠️ Artigo LCP:47 ainda não está correto. Descrição atual: %s", artigo47.Descricao)
 		}
 	}
-	
+
 	// Verificar artigo 337 do CP
 	var artigo337 domain.ArtigoPenal
 	err = coll.FindOne(ctx, bson.M{"idUnico": "CP:337"}).Decode(&artigo337)
@@ -780,7 +825,7 @@ func migration008FixArticles47And337(ctx context.Context, db *mongo.Database, lo
 			log.Warn().Msgf("⚠️ Artigo CP:337 ainda não está correto. Descrição atual: %s", artigo337.Descricao)
 		}
 	}
-	
+
 	log.Info().Msg("✅ Migration 008 concluída!")
 	return nil
 }
@@ -788,16 +833,16 @@ func migration008FixArticles47And337(ctx context.Context, db *mongo.Database, lo
 // migration009AddArticles12_211_307_329_349 adiciona os novos artigos penais
 func migration009AddArticles12_211_307_329_349(ctx context.Context, db *mongo.Database, log zerolog.Logger) error {
 	log.Info().Msg("🔄 Executando migration 009: Adicionar artigos 12 (DES), 211, 307, 329 e 349 (CP)...")
-	
+
 	// Usar a função seedPenal que já tem toda a lógica correta
 	err := seedPenal(ctx, db, log)
 	if err != nil {
 		return fmt.Errorf("erro ao executar seedPenal: %w", err)
 	}
-	
+
 	// Verificar se os artigos foram adicionados
 	coll := db.Collection("penal_artigos")
-	
+
 	artigosParaVerificar := []string{
 		"DES:12",
 		"CP:211",
@@ -805,7 +850,7 @@ func migration009AddArticles12_211_307_329_349(ctx context.Context, db *mongo.Da
 		"CP:329",
 		"CP:349",
 	}
-	
+
 	for _, idUnico := range artigosParaVerificar {
 		count, err := coll.CountDocuments(ctx, bson.M{"idUnico": idUnico})
 		if err != nil {
@@ -816,7 +861,7 @@ func migration009AddArticles12_211_307_329_349(ctx context.Context, db *mongo.Da
 			log.Warn().Msgf("⚠️ Artigo %s não encontrado após migration.", idUnico)
 		}
 	}
-	
+
 	// Verificar total geral
 	totalCount, err := coll.CountDocuments(ctx, bson.M{})
 	if err != nil {
@@ -827,7 +872,116 @@ func migration009AddArticles12_211_307_329_349(ctx context.Context, db *mongo.Da
 			log.Info().Msg("✅ Total de artigos atualizado corretamente!")
 		}
 	}
-	
+
 	log.Info().Msg("✅ Migration 009 concluída!")
+	return nil
+}
+
+// migration010PenalV2 aplica o Penal v2:
+//  1. Faz o upsert de todos os dispositivos do seed (seedPenal, chaveado por idUnico);
+//  2. Remove do banco qualquer documento cujo idUnico NÃO esteja no seed
+//     (dispositivos fantasmas/inexistentes, ex: "CDC:61.II");
+//  3. Loga a contagem final e a contagem por tipo.
+//
+// Guarda de segurança: se o seed não puder ser lido ou tiver menos de 1000 entradas,
+// retorna erro ANTES de remover qualquer coisa.
+func migration010PenalV2(ctx context.Context, db *mongo.Database, log zerolog.Logger) error {
+	const minSeedEntries = 1000
+
+	log.Info().Msg("🔧 Migration 010: Penal v2 — expansão para Código Penal completo + legislação especial")
+
+	// 1. Carregar e validar o seed ANTES de qualquer alteração destrutiva
+	seedFile := findSeedFile("penal.json")
+	if seedFile == "" {
+		return fmt.Errorf("migration 010: arquivo penal.json não encontrado")
+	}
+
+	data, err := os.ReadFile(seedFile)
+	if err != nil {
+		return fmt.Errorf("migration 010: erro ao ler %s: %w", seedFile, err)
+	}
+
+	var seedArtigos []domain.ArtigoPenal
+	if err := json.Unmarshal(data, &seedArtigos); err != nil {
+		return fmt.Errorf("migration 010: erro ao fazer parse de %s: %w", seedFile, err)
+	}
+
+	if len(seedArtigos) < minSeedEntries {
+		return fmt.Errorf("migration 010: seed penal.json contém apenas %d entradas (mínimo esperado: %d); abortando sem alterar o banco", len(seedArtigos), minSeedEntries)
+	}
+
+	seedIDs := make(map[string]struct{}, len(seedArtigos))
+	for _, a := range seedArtigos {
+		if a.IdUnico != "" {
+			seedIDs[a.IdUnico] = struct{}{}
+		}
+	}
+	if len(seedIDs) < minSeedEntries {
+		return fmt.Errorf("migration 010: seed penal.json contém apenas %d idUnico válidos (mínimo esperado: %d); abortando sem alterar o banco", len(seedIDs), minSeedEntries)
+	}
+
+	// 2. Upsert de todos os dispositivos do seed
+	if err := seedPenal(ctx, db, log); err != nil {
+		return fmt.Errorf("migration 010: erro ao executar seedPenal: %w", err)
+	}
+
+	// 3. Remover dispositivos que não existem mais no seed
+	coll := db.Collection("penal_artigos")
+
+	cursor, err := coll.Find(ctx, bson.M{}, options.Find().SetProjection(bson.M{"idUnico": 1, "descricao": 1}))
+	if err != nil {
+		return fmt.Errorf("migration 010: erro ao listar dispositivos do banco: %w", err)
+	}
+
+	type staleDoc struct {
+		IdUnico   string `bson:"idUnico"`
+		Descricao string `bson:"descricao"`
+	}
+	stale := []staleDoc{}
+	for cursor.Next(ctx) {
+		var doc staleDoc
+		if err := cursor.Decode(&doc); err != nil {
+			continue
+		}
+		if _, ok := seedIDs[doc.IdUnico]; !ok {
+			stale = append(stale, doc)
+		}
+	}
+	cursor.Close(ctx)
+
+	removed := 0
+	for _, doc := range stale {
+		log.Info().
+			Str("idUnico", doc.IdUnico).
+			Str("descricao", doc.Descricao).
+			Msg("[migration 010] 🗑️  Removendo dispositivo inexistente no seed")
+
+		res, err := coll.DeleteOne(ctx, bson.M{"idUnico": doc.IdUnico})
+		if err != nil {
+			log.Error().Err(err).Str("idUnico", doc.IdUnico).Msg("[migration 010] Erro ao remover dispositivo")
+			continue
+		}
+		removed += int(res.DeletedCount)
+	}
+	log.Info().Msgf("[migration 010] 🗑️  Dispositivos removidos (ausentes no seed): %d", removed)
+
+	// 4. Contagem final e por tipo
+	totalCount, err := coll.CountDocuments(ctx, bson.M{})
+	if err != nil {
+		log.Warn().Msgf("[migration 010] ⚠️ Erro ao contar dispositivos: %v", err)
+	} else {
+		log.Info().Msgf("[migration 010] 📊 Total de dispositivos no banco: %d (seed: %d)", totalCount, len(seedIDs))
+	}
+
+	for _, tipo := range []string{"crime", "contravencao", "disposicao", "revogado"} {
+		n, err := coll.CountDocuments(ctx, bson.M{"tipo": tipo})
+		if err != nil {
+			log.Warn().Msgf("[migration 010] ⚠️ Erro ao contar tipo %s: %v", tipo, err)
+			continue
+		}
+		log.Info().Msgf("[migration 010] 📊 tipo=%s: %d", tipo, n)
+	}
+
+	log.Info().Msg("✅ Migration 010 concluída!")
 	return nil
 }

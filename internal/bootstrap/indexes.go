@@ -211,7 +211,7 @@ func CreateIndexes(ctx context.Context, db *mongo.Database, log zerolog.Logger) 
 				name, _ := idx["name"].(string)
 				key, _ := idx["key"].(bson.M)
 				unique, _ := idx["unique"].(bool)
-				
+
 				// Remover índice único em "codigo" (seja codigo_unique, codigo_1, etc)
 				if name != "" && unique {
 					if key != nil {
@@ -272,6 +272,20 @@ func CreateIndexes(ctx context.Context, db *mongo.Database, log zerolog.Logger) 
 	if err := createIndex("penal_artigos", mongo.IndexModel{
 		Keys: bson.D{{Key: "legislacao", Value: 1}},
 	}, "legislacao"); err != nil {
+		return err
+	}
+
+	// Penal v2: ordenação global estável (CP primeiro, depois leis especiais)
+	if err := createIndex("penal_artigos", mongo.IndexModel{
+		Keys: bson.D{{Key: "ordem", Value: 1}},
+	}, "ordem"); err != nil {
+		return err
+	}
+
+	// Penal v2: listagem por legislação já ordenada (filtro + sort cobertos pelo índice)
+	if err := createIndex("penal_artigos", mongo.IndexModel{
+		Keys: bson.D{{Key: "legislacao", Value: 1}, {Key: "ordem", Value: 1}},
+	}, "legislacao_ordem"); err != nil {
 		return err
 	}
 
