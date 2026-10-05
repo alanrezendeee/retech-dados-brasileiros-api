@@ -1,9 +1,9 @@
 openapi: 3.0.3
 info:
-  title: Retech Core API
+  title: RetechHub API
   version: 1.0.0
   description: |
-    # 🚀 Retech Core API
+    # 🚀 RetechHub API
     
     A API definitiva de dados brasileiros para desenvolvedores.
     
