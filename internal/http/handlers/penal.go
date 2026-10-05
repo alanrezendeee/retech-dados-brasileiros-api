@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -511,4 +512,138 @@ func (h *PenalHandler) GetCacheStats(c *gin.Context) {
 		"totalPorNivel": totalPorNivel,
 		"cacheVersion":  penalCacheVersion,
 	})
+}
+
+// GetArvore retorna o artigo (caput) e todos os seus dispositivos (parágrafos, incisos e alíneas)
+// em uma única chamada, além do artigo anterior e do próximo na mesma legislação.
+// GET /penal/arvore/:idUnico   (ex.: /penal/arvore/CP:121, /penal/arvore/DRG:33)
+// Alimenta as páginas públicas /penal/artigo/[slug] do site.
+func (h *PenalHandler) GetArvore(c *gin.Context) {
+	ctx := c.Request.Context()
+	idUnico := strings.TrimSpace(strings.TrimPrefix(c.Param("idUnico"), "/"))
+	if decoded, err := url.PathUnescape(idUnico); err == nil {
+		idUnico = decoded
+	}
+	if idUnico == "" || !strings.Contains(idUnico, ":") {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"type":   "https://retech-core/errors/validation",
+			"title":  "Invalid Query",
+			"status": http.StatusBadRequest,
+			"detail": "Informe o idUnico no formato PREFIXO:CODIGO (ex: CP:121)",
+		})
+		return
+	}
+
+	cacheKey := fmt.Sprintf("penal:%s:arvore:%s", penalCacheVersion, strings.ToLower(idUnico))
+	if h.redis != nil {
+		if redisClient, ok := h.redis.(*cache.RedisClient); ok {
+			if cachedJSON, err := redisClient.Get(ctx, cacheKey); err == nil && cachedJSON != "" {
+				c.Header("Content-Type", "application/json")
+				c.String(http.StatusOK, cachedJSON)
+				return
+			}
+		}
+	}
+
+	collection := h.db.DB.Collection("penal_artigos")
+
+	var artigo domain.ArtigoPenal
+	if err := collection.FindOne(ctx, bson.M{"idUnico": idUnico}).Decode(&artigo); err != nil {
+		if err == mongo.ErrNoDocuments {
+			c.JSON(http.StatusNotFound, gin.H{
+				"type":   "https://retech-core/errors/not-found",
+				"title":  "Artigo Not Found",
+				"status": http.StatusNotFound,
+				"detail": fmt.Sprintf("Artigo %s não encontrado", idUnico),
+			})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"type":   "https://retech-core/errors/database-error",
+			"title":  "Database Error",
+			"status": http.StatusInternalServerError,
+			"detail": "Erro ao buscar artigo",
+		})
+		return
+	}
+	if artigo.Nivel != "artigo" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"type":   "https://retech-core/errors/validation",
+			"title":  "Invalid Query",
+			"status": http.StatusBadRequest,
+			"detail": fmt.Sprintf("%s é um %s; a árvore é obtida a partir do artigo (caput)", idUnico, artigo.Nivel),
+		})
+		return
+	}
+
+	// Dispositivos filhos: mesma legislação, codigo começando com "<codigo>." (ex.: "121." → 121.1, 121.2.I ...)
+	prefix := "^" + regexp.QuoteMeta(artigo.Codigo) + `\.`
+	cursor, err := collection.Find(ctx,
+		bson.M{"legislacao": artigo.Legislacao, "codigo": bson.M{"$regex": prefix}},
+		options.Find().SetSort(bson.D{{Key: "ordem", Value: 1}}))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"type":   "https://retech-core/errors/database-error",
+			"title":  "Database Error",
+			"status": http.StatusInternalServerError,
+			"detail": "Erro ao buscar dispositivos",
+		})
+		return
+	}
+	defer cursor.Close(ctx)
+	dispositivos := []domain.ArtigoPenal{}
+	if err := cursor.All(ctx, &dispositivos); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"type":   "https://retech-core/errors/database-error",
+			"title":  "Database Error",
+			"status": http.StatusInternalServerError,
+			"detail": "Erro ao processar dispositivos",
+		})
+		return
+	}
+
+	// Vizinhos (artigo anterior/próximo na mesma legislação, nivel artigo)
+	toResumo := func(a *domain.ArtigoPenal) interface{} {
+		if a == nil {
+			return nil
+		}
+		return domain.PenalResponse{
+			Codigo: a.Codigo, CodigoFormatado: a.CodigoFormatado, Descricao: a.Descricao, Tipo: a.Tipo,
+			Nivel: a.Nivel, Legislacao: a.Legislacao, LegislacaoNome: a.LegislacaoNome, IdUnico: a.IdUnico,
+		}
+	}
+	var anterior, proximo *domain.ArtigoPenal
+	var tmp domain.ArtigoPenal
+	if err := collection.FindOne(ctx,
+		bson.M{"legislacao": artigo.Legislacao, "nivel": "artigo", "ordem": bson.M{"$lt": artigo.Ordem}},
+		options.FindOne().SetSort(bson.D{{Key: "ordem", Value: -1}})).Decode(&tmp); err == nil {
+		a := tmp
+		anterior = &a
+	}
+	tmp = domain.ArtigoPenal{}
+	if err := collection.FindOne(ctx,
+		bson.M{"legislacao": artigo.Legislacao, "nivel": "artigo", "ordem": bson.M{"$gt": artigo.Ordem}},
+		options.FindOne().SetSort(bson.D{{Key: "ordem", Value: 1}})).Decode(&tmp); err == nil {
+		a := tmp
+		proximo = &a
+	}
+
+	response := gin.H{
+		"success": true,
+		"code":    "OK",
+		"data": gin.H{
+			"artigo":       artigo,
+			"dispositivos": dispositivos,
+			"anterior":     toResumo(anterior),
+			"proximo":      toResumo(proximo),
+		},
+		"meta": gin.H{"totalDispositivos": len(dispositivos)},
+	}
+
+	if h.redis != nil {
+		if redisClient, ok := h.redis.(*cache.RedisClient); ok {
+			redisClient.Set(ctx, cacheKey, response, 365*24*time.Hour)
+		}
+	}
+	c.JSON(http.StatusOK, response)
 }

@@ -172,3 +172,55 @@ func (db *DB) SearchByAddress(ctx context.Context, uf, query string, limit int) 
 	}
 	return results, nil
 }
+
+// CityItem é um CEP resumido para listagens por cidade (páginas públicas de SEO).
+type CityItem struct {
+	CEP          string `json:"cep"`
+	CEPFormatted string `json:"cepFormatado"`
+	Logradouro   string `json:"logradouro"`
+	Bairro       string `json:"bairro"`
+}
+
+// ListByCity lista os CEPs já conhecidos de uma cidade (uf + localidade, comparação sem acentos
+// e sem diferenciar maiúsculas), ordenados por bairro e logradouro. Retorna também o total.
+// Só devolve o que o crawler/consultas já popularam: cidades pequenas podem vir vazias.
+func (db *DB) ListByCity(ctx context.Context, uf, cidade string, limit int) (int64, []CityItem, error) {
+	if limit <= 0 || limit > 1000 {
+		limit = 300
+	}
+	uf = strings.ToUpper(strings.TrimSpace(uf))
+	cidade = strings.TrimSpace(cidade)
+
+	const where = `WHERE uf = $1 AND lower(translate(localidade,
+		'ÁÀÂÃÄáàâãäÉÈÊËéèêëÍÌÎÏíìîïÓÒÔÕÖóòôõöÚÙÛÜúùûüÇçÑñ',
+		'AAAAAaaaaaEEEEeeeeIIIIiiiiOOOOOoooooUUUUuuuuCcNn')) = lower(translate($2,
+		'ÁÀÂÃÄáàâãäÉÈÊËéèêëÍÌÎÏíìîïÓÒÔÕÖóòôõöÚÙÛÜúùûüÇçÑñ',
+		'AAAAAaaaaaEEEEeeeeIIIIiiiiOOOOOoooooUUUUuuuuCcNn'))
+		AND not_found_count = 0`
+
+	var total int64
+	if err := db.Pool.QueryRow(ctx, `SELECT COUNT(*) FROM ceps `+where, uf, cidade).Scan(&total); err != nil {
+		return 0, nil, err
+	}
+
+	rows, err := db.Pool.Query(ctx, `
+		SELECT cep, cep_formatted, COALESCE(logradouro,''), COALESCE(bairro,'')
+		FROM ceps `+where+`
+		ORDER BY bairro, logradouro, cep
+		LIMIT $3
+	`, uf, cidade, limit)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer rows.Close()
+
+	items := []CityItem{}
+	for rows.Next() {
+		var it CityItem
+		if err := rows.Scan(&it.CEP, &it.CEPFormatted, &it.Logradouro, &it.Bairro); err != nil {
+			return 0, nil, err
+		}
+		items = append(items, it)
+	}
+	return total, items, rows.Err()
+}

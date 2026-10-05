@@ -416,6 +416,92 @@ paths:
   # ==========================================
   # CNPJ
   # ==========================================
+  /cep/cidade:
+    get:
+      tags: [CEP]
+      summary: CEPs conhecidos de uma cidade
+      description: |
+        Lista os CEPs já presentes na base própria (PostgreSQL) para uma cidade, ordenados por bairro e
+        logradouro. A base cresce conforme CEPs são consultados e enumerados pelo crawler, então cidades
+        pequenas podem retornar lista vazia (HTTP 200 com `total: 0`).
+
+        ```bash
+        curl "__API_BASE_URL__/cep/cidade?uf=SP&cidade=São%20Paulo&limit=300" -H "X-API-Key: sua_api_key_aqui"
+        ```
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - name: uf
+          in: query
+          required: true
+          schema:
+            type: string
+            example: "SP"
+        - name: cidade
+          in: query
+          required: true
+          description: Nome do município (sem diferenciar acentos/maiúsculas)
+          schema:
+            type: string
+            example: "São Paulo"
+        - name: limit
+          in: query
+          required: false
+          description: Máximo de itens (padrão 300, máximo 1000)
+          schema:
+            type: integer
+            example: 300
+      responses:
+        '200':
+          description: Lista de CEPs da cidade
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  code:
+                    type: string
+                  data:
+                    type: object
+                    properties:
+                      uf:
+                        type: string
+                      cidade:
+                        type: string
+                      total:
+                        type: integer
+                      items:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            cep:
+                              type: string
+                              example: "01001000"
+                            cepFormatado:
+                              type: string
+                              example: "01001-000"
+                            logradouro:
+                              type: string
+                              example: "Praça da Sé"
+                            bairro:
+                              type: string
+                              example: "Sé"
+        '400':
+          description: Parâmetros inválidos
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Base de CEPs por cidade indisponível
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
   /cnpj/{numero}:
     get:
       tags: [CNPJ]
@@ -1013,6 +1099,79 @@ paths:
           $ref: '#/components/responses/TooManyRequests'
         '503':
           $ref: '#/components/responses/Maintenance'
+
+  /penal/arvore/{idUnico}:
+    get:
+      tags: [Artigos Penais]
+      summary: Árvore do Artigo (caput + parágrafos, incisos e alíneas)
+      description: |
+        Retorna o artigo (caput) e **todos os seus dispositivos** (parágrafos, incisos e alíneas) em uma única
+        chamada, ordenados conforme o texto legal, além do artigo anterior e do próximo na mesma legislação.
+        Ideal para renderizar a página completa de um artigo (ex.: "Art. 157 do CP" com §§ 1º a 5º e incisos).
+
+        **Exemplo:**
+        ```bash
+        curl __API_BASE_URL__/penal/arvore/CP:121 -H "X-API-Key: sua_api_key_aqui"
+        curl __API_BASE_URL__/penal/arvore/DRG:33 -H "X-API-Key: sua_api_key_aqui"
+        ```
+      security:
+        - ApiKeyAuth: []
+      parameters:
+        - name: idUnico
+          in: path
+          required: true
+          description: "ID único do artigo (nível artigo) no formato PREFIXO:CODIGO (ex: CP:121, CP:121-A, DRG:33)"
+          schema:
+            type: string
+            example: "CP:121"
+      responses:
+        '200':
+          description: Artigo e seus dispositivos
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  code:
+                    type: string
+                    example: "OK"
+                  data:
+                    type: object
+                    properties:
+                      artigo:
+                        $ref: '#/components/schemas/ArtigoPenalCompleto'
+                      dispositivos:
+                        type: array
+                        description: Parágrafos, incisos e alíneas do artigo, em ordem
+                        items:
+                          $ref: '#/components/schemas/ArtigoPenalCompleto'
+                      anterior:
+                        description: Artigo anterior na mesma legislação (ou null)
+                        $ref: '#/components/schemas/ArtigoPenal'
+                      proximo:
+                        description: Próximo artigo na mesma legislação (ou null)
+                        $ref: '#/components/schemas/ArtigoPenal'
+                  meta:
+                    type: object
+                    properties:
+                      totalDispositivos:
+                        type: integer
+                        example: 25
+        '400':
+          description: idUnico inválido ou não é um artigo (caput)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: Artigo não encontrado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
 
   /penal/search:
     get:
