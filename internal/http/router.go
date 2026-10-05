@@ -17,7 +17,7 @@ func NewRouter(
 	log zerolog.Logger,
 	m *storage.Mongo,
 	redisClient interface{}, // interface{} para permitir nil (graceful degradation)
-	cepDB *cepdb.DB,         // nil se CEPDB_URL não configurado (graceful degradation)
+	cepDB *cepdb.DB, // nil se CEPDB_URL não configurado (graceful degradation)
 	health *handlers.HealthHandler,
 	apikeys *storage.APIKeysRepo,
 	tenants *storage.TenantsRepo,
@@ -216,6 +216,33 @@ func NewRouter(
 			usageLogger.Middleware(),
 			penalHandler.SearchArtigos,
 		)
+
+		// PENAL - árvore do artigo (páginas públicas do site)
+		publicGroup.GET("/penal/arvore/*idUnico",
+			auth.AuthAPIKey(apikeys),
+			auth.RequireScope(apikeys, "penal"), // ✅ Valida scope!
+			playgroundRateLimiter.Middleware(),
+			usageLogger.Middleware(),
+			penalHandler.GetArvore,
+		)
+
+		// CEP - CEPs de uma cidade (páginas públicas do site)
+		publicGroup.GET("/cep/cidade",
+			auth.AuthAPIKey(apikeys),
+			auth.RequireScope(apikeys, "cep"), // ✅ Valida scope!
+			playgroundRateLimiter.Middleware(),
+			usageLogger.Middleware(),
+			cepHandler.ListByCity,
+		)
+
+		// GEO - municípios por UF (páginas públicas do site)
+		publicGroup.GET("/geo/municipios/:uf",
+			auth.AuthAPIKey(apikeys),
+			auth.RequireScope(apikeys, "geo"), // ✅ Valida scope!
+			playgroundRateLimiter.Middleware(),
+			usageLogger.Middleware(),
+			geoHandler.ListMunicipiosByUF,
+		)
 	}
 
 	// Auth endpoints (públicos)
@@ -255,6 +282,7 @@ func NewRouter(
 		usageLogger.Middleware(),           // Loga uso
 	)
 	{
+		cepGroup.GET("/cidade", cepHandler.ListByCity) // CEPs conhecidos de uma cidade (antes de /:codigo)
 		cepGroup.GET("/:codigo", cepHandler.GetCEP)
 		cepGroup.GET("/buscar", planGate.RequireReverseCEP(), cepHandler.SearchCEP) // Busca reversa (Starter+)
 	}
@@ -275,16 +303,17 @@ func NewRouter(
 	// PENAL endpoints (protegidos por API Key + rate limit + logging + manutenção + scopes)
 	penalGroup := r.Group("/penal")
 	penalGroup.Use(
-		maintenanceMiddleware.Middleware(), // Verifica manutenção
-		auth.AuthAPIKey(apikeys),           // Requer API Key válida
+		maintenanceMiddleware.Middleware(),  // Verifica manutenção
+		auth.AuthAPIKey(apikeys),            // Requer API Key válida
 		auth.RequireScope(apikeys, "penal"), // ✅ Verifica scope 'penal' ou 'all'
-		rateLimiter.Middleware(),           // Aplica rate limiting
-		usageLogger.Middleware(),           // Loga uso
+		rateLimiter.Middleware(),            // Aplica rate limiting
+		usageLogger.Middleware(),            // Loga uso
 	)
 	{
 		penalGroup.GET("/artigos", penalHandler.ListArtigos)
 		penalGroup.GET("/artigos/:codigo", penalHandler.GetArtigo)
 		penalGroup.GET("/search", penalHandler.SearchArtigos)
+		penalGroup.GET("/arvore/*idUnico", penalHandler.GetArvore) // caput + parágrafos/incisos/alíneas
 	}
 
 	// Admin endpoints (protegidos por JWT + role SUPER_ADMIN)

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,7 +26,7 @@ import (
 type CEPHandler struct {
 	db       *storage.Mongo
 	redis    interface{} // interface{} para permitir nil (graceful degradation)
-	cepDB    *cepdb.DB  // nil se CEPDB_URL não configurado (graceful degradation)
+	cepDB    *cepdb.DB   // nil se CEPDB_URL não configurado (graceful degradation)
 	settings *storage.SettingsRepo
 }
 
@@ -515,17 +516,17 @@ func cepResponseFromDB(c *cepdb.CEP) *CEPResponse {
 // cepToDB converte CEPResponse → cepdb.CEP para salvar no PostgreSQL
 func cepToDB(r *CEPResponse) *cepdb.CEP {
 	return &cepdb.CEP{
-		CEP:        r.CEP,
-		Logradouro: r.Logradouro,
+		CEP:         r.CEP,
+		Logradouro:  r.Logradouro,
 		Complemento: r.Complemento,
-		Bairro:     r.Bairro,
-		Localidade: r.Localidade,
-		UF:         r.UF,
-		IBGE:       r.IBGE,
-		DDD:        r.DDD,
-		Latitude:   r.Latitude,
-		Longitude:  r.Longitude,
-		Sources:    []string{r.Source},
+		Bairro:      r.Bairro,
+		Localidade:  r.Localidade,
+		UF:          r.UF,
+		IBGE:        r.IBGE,
+		DDD:         r.DDD,
+		Latitude:    r.Latitude,
+		Longitude:   r.Longitude,
+		Sources:     []string{r.Source},
 	}
 }
 
@@ -533,7 +534,7 @@ func cepToDB(r *CEPResponse) *cepdb.CEP {
 func (h *CEPHandler) fetchViaCEP(cep string) (*CEPResponse, error) {
 	baseURL := config.GetCEPPrimaryURL()
 	url := fmt.Sprintf("%s/ws/%s/json/", baseURL, cep)
-	
+
 	fmt.Printf("🌐 [CEP] Primary: %s\n", baseURL)
 
 	client := &http.Client{Timeout: config.GetCEPTimeout()}
@@ -597,7 +598,7 @@ func (h *CEPHandler) fetchViaCEPByAddress(uf, cidade, logradouro string) ([]CEPR
 func (h *CEPHandler) fetchBrasilAPI(cep string) (*CEPResponse, error) {
 	baseURL := config.GetCEPFallbackURL()
 	url := fmt.Sprintf("%s/api/cep/v1/%s", baseURL, cep)
-	
+
 	fmt.Printf("🔄 [CEP] Fallback: %s\n", baseURL)
 
 	client := &http.Client{Timeout: config.GetCEPTimeout()}
@@ -656,7 +657,7 @@ func (h *CEPHandler) GetStats(c *gin.Context) {
 	loc, _ := time.LoadLocation("America/Sao_Paulo")
 	nowBrasilia := now.In(loc)
 	today := nowBrasilia.Format("2006-01-02")
-	
+
 	// Consultas hoje (timezone Brasília)
 	today_count, _ := collection.CountDocuments(ctx, bson.M{
 		"api_name": "cep",
@@ -738,5 +739,61 @@ func (h *CEPHandler) ClearCache(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"message":      "Cache limpo com sucesso",
 		"deletedCount": result.DeletedCount,
+	})
+}
+
+// ListByCity lista CEPs já conhecidos de uma cidade (base PostgreSQL do cepdb).
+// GET /cep/cidade?uf=SP&cidade=São Paulo&limit=300
+// Usado pelas páginas públicas /cep/[uf]/[cidade] do site. Retorna lista vazia (200) quando
+// a cidade ainda não tem CEPs populados; 503 quando o cepdb não está configurado.
+func (h *CEPHandler) ListByCity(c *gin.Context) {
+	uf := strings.ToUpper(strings.TrimSpace(c.Query("uf")))
+	cidade := strings.TrimSpace(c.Query("cidade"))
+	limit := 300
+	if l := c.Query("limit"); l != "" {
+		if n, err := strconv.Atoi(l); err == nil {
+			limit = n
+		}
+	}
+	if len(uf) != 2 || cidade == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"type":   "https://retech-core/errors/validation",
+			"title":  "Invalid Query",
+			"status": http.StatusBadRequest,
+			"detail": "Parâmetros obrigatórios: uf (2 letras) e cidade",
+		})
+		return
+	}
+	if h.cepDB == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{
+			"type":   "https://retech-core/errors/unavailable",
+			"title":  "CEP Database Unavailable",
+			"status": http.StatusServiceUnavailable,
+			"detail": "Base de CEPs por cidade indisponível",
+		})
+		return
+	}
+
+	total, items, err := h.cepDB.ListByCity(c.Request.Context(), uf, cidade, limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"type":   "https://retech-core/errors/database-error",
+			"title":  "Database Error",
+			"status": http.StatusInternalServerError,
+			"detail": "Erro ao listar CEPs da cidade",
+		})
+		return
+	}
+
+	c.Header("Cache-Control", "public, max-age=3600")
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"code":    "OK",
+		"data": gin.H{
+			"uf":     uf,
+			"cidade": cidade,
+			"total":  total,
+			"items":  items,
+		},
 	})
 }
